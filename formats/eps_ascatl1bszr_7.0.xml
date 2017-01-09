@@ -32,11 +32,15 @@
 
 <version-control>
     <format-version>
-        <major>12</major><minor>0</minor>
-	<baseline>current</baseline>
+        <major>5</major><minor>0</minor>
+	<baseline>postnov05</baseline>
+    </format-version>
+    <format-version>
+        <major>11</major><minor>0</minor>
+	<baseline>launch</baseline>
     </format-version>
     <pfs-version>
-        <major>9</major><minor>0</minor>
+        <major>7</major><minor>0</minor>
     </pfs-version>
 </version-control>
 
@@ -474,7 +478,7 @@
         <field name="SUBSETTED_PRODUCT" type="boolean" length="1" description="Set when product has been subsetted (e.g. geographically subsetted using a region of interest filter). Implies the presence of one or more UMARF GIADRs in GAD section for product retrieved from UMARF."/>
     </mphr>
 
-    <sphr name="sphr" subclass="1" version="2" instrument="ASCAT" description="Secondary Product Record Header">
+    <sphr name="sphr" subclass="1" version="1" instrument="ASCAT" description="Secondary Product Record Header">
 		<delimiter name="L1A Product Details"/>
 		<field name="N_L1A_MDR" type="uinteger" length="8" description="Total number of MDRs in the L1A product"/>
 		<field name="N_L1A_MDR_B0" type="uinteger" length="8" description="Number of MDRs in the L1Aproduct corresponding to Beam 0"/>
@@ -487,29 +491,34 @@
 		<field name="TOTAL_GAPS_SIZE" type="uinteger" length="8" description="Total gap size in miliseconds"/>
 		<field name="N_HKTM_PACKETS_RECEIVED" type="uinteger" length="8" description="Number of HKTM telemetry packets received within the sensing time of the product"/>
 		<delimiter name="L1A Product Quality"/>
+		<field name="N_F_ECHO" type="uinteger" length="8" description="Number of instances where the flag F_ECHO is 1"/>
+		<field name="N_M_ECHO" type="uinteger" length="8" description="Number of instances where the flag M_ECHO is 1"/>
+		<field name="N_C_ECHO" type="uinteger" length="8" description="Number of instances where the flag C_ECHO is 1"/>
+		<field name="N_I_ECHO" type="uinteger" length="8" description="Number of instances where the flag I_ECHO is 1"/>
 		<field name="N_F_NOISE" type="uinteger" length="8" description="Number of instances where the flag F_NOISE is 1"/>
+		<field name="N_M_NOISE" type="uinteger" length="8" description="Number of instances where the flag M_NOISE is 1"/>
+		<field name="N_C_NOISE" type="uinteger" length="8" description="Number of instances where the flag C_NOISE is 1"/>
+		<field name="N_I_NOISE" type="uinteger" length="8" description="Number of instances where the flag I_NOISE is 1"/>
 		<field name="N_F_PG" type="uinteger" length="8" description="Number of instances where the flag F_PG is 1"/>
 		<field name="N_V_PG" type="uinteger" length="8" description="Number of instances where the flag V_PG is 1"/>
+		<field name="N_F_EXT_PG" type="uinteger" length="8" description="Number of instances where the flag F_EXT_PG is 1"/>
 		<field name="N_F_FILTER" type="uinteger" length="8" description="Number of instances where the flag F_FILTER is 1"/>
 		<field name="N_V_FILTER" type="uinteger" length="8" description="Number of instances where the flag V_FILTER is 1"/>
-		<field name="N_F_PGP" type="uinteger" length="8" description="Number of instances where the flag F_PGP is 1"/>
-		<field name="N_F_NP" type="uinteger" length="8" description="Number of instances where the flag F_NP is 1"/>
+		<field name="N_F_EXT_FILTER" type="uinteger" length="8" description="Number of instances where the flag F_EXT_FILTER is 1"/>
+		<field name="N_F_TEL_FILTER" type="uinteger" length="8" description="Number of instances where the flag F_TEL_FILTER is 1"/>
 		<field name="N_F_ORBIT" type="uinteger" length="8" description="Number of instances where the flag F_ORBIT is 1"/>
 		<field name="N_F_ATTITUDE" type="uinteger" length="8" description="Number of instances where the flag F_ATTITUDE is 1"/>
 		<field name="N_F_OMEGA" type="uinteger" length="8" description="Number of instances where the flag F_OMEGA is 1"/>
 		<field name="N_F_MAN" type="uinteger" length="8" description="Number of instances where the flag F_MAN is 1"/>
-		<field name="N_F_OSV" type="uinteger" length="8" description="Number of instances where the flag F_OSV is 1"/>
+		<field name="N_F_DSL" type="uinteger" length="8" description="Number of instances where the flag F_DSL is 1"/>
 		<field name="N_F_E_TEL_PRES" type="uinteger" length="8" description="Number of instances where the flag F_E_TEL_PRES is 1"/>
 		<field name="N_F_E_TEL_IR" type="uinteger" length="8" description="Number of instances where the flag F_E_TEL_IR is 1"/>
 		<field name="N_F_CE" type="uinteger" length="8" description="Number of instances where the flag F_CE is 1"/>
 		<field name="N_V_CE" type="uinteger" length="8" description="Number of instances where the flag V_CE is 1"/>
 		<field name="N_F_OA" type="uinteger" length="8" description="Number of instances where the flag F_OA is 1"/>
 		<field name="N_F_TEL" type="uinteger" length="8" description="Number of instances where the flag F_TEL is 1"/>
-		<field name="N_F_REF" type="uinteger" length="8" description="Number of instances where the flag F_REF is 1"/>
 		<field name="N_F_SA" type="uinteger" length="8" description="Number of instances where the flag F_SA is 1"/>
 		<field name="N_F_LAND" type="uinteger" length="8" description="Number of instances where the flag F_LAND is 1"/>
-		<field name="N_F_GEO" type="uinteger" length="8" description="Number of instances where the flag F_GEO is 1"/>
-		<field name="N_F_SIGN" type="uinteger" length="8" description="Number of instances where the flag F_SIGN is 1"/>
 		<delimiter name="L1b product details Note: If the SPHR is part of a L1A product, the field values in this section will be filled in with the value 99999999"/>
 		<field name="N_L1B_MDR" type="uinteger" length="8" description="Total number of MDRs in the L1B product"/>
 		<field name="N_EMPTY_S0_TRIP" type="uinteger" length="8" description="Number of fully empty s0 triplets"/>
@@ -521,38 +530,38 @@
 		<field name="N_EMPTY_S0_TRIP_A" type="uinteger" length="8" description="Number of s0 AFT default values"/>
 		<delimiter name="L1b product quality Note: If the SPHR is part of a L1A product, the field values in this section will be filled in with  the value 99999999"/>
 		<field name="N_F_KP_F" type="uinteger" length="8" description="Number of instances where the flag F_KP is set to 1for FORE s0s"/>
-		<field name="N_F_USABLE_F" type="uinteger" length="8" description="Number of instances where the flag F_USABLE is set to 2 for FORE s0s"/>
-		<field name="N_F_F_F" type="uinteger" length="8" description="Number of instances where F_F is greater than 0 for FORE s0s"/>
-		<field name="N_F_V_F" type="uinteger" length="8" description="Number of instances where F_V is greater than 0 for FORE s0s"/>
-		<field name="N_F_OA_F" type="uinteger" length="8" description="Number of instances where F_OA is greater than 0 for FORE s0s"/>
-		<field name="N_F_SA_F" type="uinteger" length="8" description="Number of instances where F_SA is greater than 0 for FORE s0s"/>
-		<field name="N_F_TEL_F" type="uinteger" length="8" description="Number of instances where F_TEL is greater than 0 for FORE s0s"/>
-		<field name="N_F_REF_F" type="uinteger" length="8" description="Number of instances where F_REF is greater than 0 for FORE s0s"/>
-		<field name="N_F_LAND_F" type="uinteger" length="8" description="Number of instances where F_LAND is greater than 0 for FORE s0s"/>
+		<field name="N_F_USABLE_F" type="uinteger" length="8" description="Number of instances where the flag F_USABLE is set to 1 for FORE s0s"/>
+		<field name="AVG_F_F_F" type="uinteger" length="8" description="Averaged value of F_F for FORE s0s"/>
+		<field name="AVG_F_V_F" type="uinteger" length="8" description="Averaged value of F_V for FORE s0s"/>
+		<field name="AVG_F_OA_F" type="uinteger" length="8" description="Averaged value of F_OA for FORE s0s"/>
+		<field name="AVG_F_SA_F" type="uinteger" length="8" description="Averaged value of F_SA for FORE s0s"/>
+		<field name="AVG_F_TEL_F" type="uinteger" length="8" description="Averaged value of F_TEL for FORE s0s"/>
+		<field name="AVG_F_EXT_FIL_F" type="uinteger" length="8" description="Averaged value of F_EXT_FIL for FORE s0s"/>
+		<field name="AVG_F_LAND_F" type="uinteger" length="8" description="Averaged value of F_LAND for FORE s0s"/>
 		<field name="N_F_KP_M" type="uinteger" length="8" description="Number of instances where the flag F_KP is set to 1 for MID s0s"/>
-		<field name="N_F_USABLE_M" type="uinteger" length="8" description="Number of instances where the flag F_USABLE is set to 2 for MID s0s"/>
-		<field name="N_F_F_M" type="uinteger" length="8" description="Number of instances where F_F is greater than 0 for MID s0s"/>
-		<field name="N_F_V_M" type="uinteger" length="8" description="Number of instances where F_V is greater than 0 for MID s0s"/>
-		<field name="N_F_OA_M" type="uinteger" length="8" description="Number of instances where F_OA is greater than 0 for MID s0s"/>
-		<field name="N_F_SA_M" type="uinteger" length="8" description="Number of instances where F_SA is greater than 0 for MID s0s"/>
-		<field name="N_F_TEL_M" type="uinteger" length="8" description="Number of instances where F_TEL is greater than 0 for MID s0s"/>
-		<field name="N_F_REF_M" type="uinteger" length="8" description="Number of instances where F_REF is greater than 0 for MID s0s"/>
-		<field name="N_F_LAND_M" type="uinteger" length="8" description="Number of instances where F_LAND is greater than 0 for MID s0s"/>
+		<field name="N_F_USABLE_M" type="uinteger" length="8" description="Number of instances where the flag F_USABLE is set to 1 for MID s0s"/>
+		<field name="AVG_F_F_M" type="uinteger" length="8" description="Averaged value of F_F for MID s0s"/>
+		<field name="AVG_F_V_M" type="uinteger" length="8" description="Averaged value of F_V for MID s0s"/>
+		<field name="AVG_F_OA_M" type="uinteger" length="8" description="Averaged value of F_OA for MID s0s"/>
+		<field name="AVG_F_SA_M" type="uinteger" length="8" description="Averaged value of F_SA for MID s0s"/>
+		<field name="AVG_F_TEL_M" type="uinteger" length="8" description="Averaged value of F_TEL for MID s0s"/>
+		<field name="AVG_F_EXT_FIL_M" type="uinteger" length="8" description="Averaged value of F_EXT_FIL for MID s0s"/>
+		<field name="AVG_F_LAND_M" type="uinteger" length="8" description="Averaged value of F_LAND for MID s0s"/>
 		<field name="N_F_KP_A" type="uinteger" length="8" description="Number of instances where the flag F_KP is set to 1 for AFT s0s"/>
-		<field name="N_F_USABLE_A" type="uinteger" length="8" description="Number of instances where the flag F_USABLE is set to 2 for AFT s0s"/>
-		<field name="N_F_F_A" type="uinteger" length="8" description="Number of instances where F_F is greater than 0 for AFT s0s"/>
-		<field name="N_F_V_A" type="uinteger" length="8" description="Number of instances where F_V is greater than 0 for AFT s0s"/>
-		<field name="N_F_OA_A" type="uinteger" length="8" description="Number of instances where F_OA is greater than 0 for AFT s0s"/>
-		<field name="N_F_SA_A" type="uinteger" length="8" description="Number of instances where F_SA is greater than 0 for AFT s0s"/>
-		<field name="N_F_TEL_A" type="uinteger" length="8" description="Number of instances where F_TEL is greater than 0 for AFT s0s"/>
-		<field name="N_F_REF_A" type="uinteger" length="8" description="Number of instances where F_REF is greater than 0 for AFT s0s"/>
-		<field name="N_F_LAND_A" type="uinteger" length="8" description="Number of instances where F_LAND is greater than 0 for AFT s0s"/>
-		<field name="PROCESSING_MESSAGE_1" type="string" length="50" description="Processing Message free text"/>
-		<field name="PROCESSING_MESSAGE_2" type="string" length="50" description="Processing Message free text"/>
+		<field name="N_F_USABLE_A" type="uinteger" length="8" description="Number of instances where the flag F_USABLE is set to 1 for AFT s0s"/>
+		<field name="AVG_F_F_A" type="uinteger" length="8" description="Averaged value of F_F for AFT s0s"/>
+		<field name="AVG_F_V_A" type="uinteger" length="8" description="Averaged value of F_V for AFT s0s"/>
+		<field name="AVG_F_OA_A" type="uinteger" length="8" description="Averaged value of F_OA for AFT s0s"/>
+		<field name="AVG_F_SA_A" type="uinteger" length="8" description="Averaged value of F_SA for AFT s0s"/>
+		<field name="AVG_F_TEL_A" type="uinteger" length="8" description="Averaged value of F_TEL for AFT s0s"/>
+		<field name="AVG_F_EXT_FIL_A" type="uinteger" length="8" description="Averaged value of F_EXT_FIL for AFT s0s"/>
+		<field name="AVG_F_LAND_A" type="uinteger" length="8" description="Averaged value of F_LAND for AFT s0s"/>
+		<field name="PROCESSING_MESSAGE_1" type="uinteger" length="50" description="Processing Message free text"/>
+		<field name="PROCESSING_MESSAGE_2" type="uinteger" length="50" description="Processing Message free text"/>
 		<delimiter name="Size of the Record"/>
 	</sphr>
 
-    <!-- <geadr name="geadr-osv" subclass="1" version="1" instrument="ASCAT" description="OSV"/> -->
+    <geadr name="geadr-osv" subclass="1" version="1" instrument="ASCAT" description="OSV"/>
 
     <geadr name="geadr-lsm" subclass="2" version="1" instrument="ASCAT" description="LSM"/>
 
@@ -576,19 +585,19 @@
         </array>
     </viadr>
 
-   <viadr name="viadr-ver" subclass="6" version="2" instrument="ASCAT" description="Processor and auxiliary file versions used">
-		<field name="PROCESSOR_VERSION1" type="enumerated" description="PPF major release number"/>
-		<field name="PROCESSOR_VERSION2" type="enumerated" description="PPF release number"/>
-		<field name="PROCESSOR_VERSION3" type="enumerated" description="PPF patch number"/>
-		<field name="PRC_VERSION1" type="enumerated" description="ASCA_PRC_xx_ Major Version"/>
-		<field name="PRC_VERSION2" type="enumerated" description="ASCA_PRC_xx_ Minor Version"/>
-		<field name="INS_VERSION1" type="enumerated" description="ASCA_INS_xx_ Major Version"/>
-		<field name="INS_VERSION2" type="enumerated" description="ASCA_INS_xx_ Minor Version"/>
-		<field name="NTB_VERSION1" type="enumerated" description="ASCA_NTB_xx_ Major Version"/>
-		<field name="NTB_VERSION2" type="enumerated" description="ASCA_NTB_xx_ Minor Version"/>
-		<field name="XCL_VERSION1" type="enumerated" description="ASCA_XCL_xx_ Major Version "/>
-		<field name="XCL_VERSION2" type="enumerated" description="ASCA_XCL_xx_ Minor Version "/>
-	</viadr>
+    <viadr name="viadr-ver" subclass="6" version="1" instrument="ASCAT" description="Orbit/attitude parameters">
+        <field name="PROCESSOR_VERSION1" type="enumerated" description="PPF major release number"/>
+        <field name="PROCESSOR_VERSION2" type="enumerated" description="PPF release number"/>
+        <field name="PROCESSOR_VERSION3" type="enumerated" description="PPF patch number"/>
+        <field name="PRC_VERSION1" type="enumerated" description="ASCA_PRC_xx_ Major Version"/>
+        <field name="PRC_VERSION2" type="enumerated" description="ASCA_PRC_xx_ Minor Version"/>
+        <field name="INS_VERSION1" type="enumerated" description="ASCA_INS_xx_ Major Version"/>
+        <field name="INS_VERSION2" type="enumerated" description="ASCA_INS_xx_ Minor Version"/>
+        <field name="NTB_VERSION1" type="enumerated" description="ASCA_NTB_xx_ Major Version"/>
+        <field name="NTB_VERSION2" type="enumerated" description="ASCA_NTB_xx_ Minor Version"/>
+        <field name="DEB_VERSION1" type="enumerated" description="ASCA_DEB_xx_ Major Version (Note: For L1A, set this value to 0)"/>
+        <field name="DEB_VERSION2" type="enumerated" description="ASCA_DEB_xx_ Minor Version (Note: For L1A, set this value to 0)"/>
+    </viadr>
 
     <veadr name="veadr-prc" subclass="1" version="1" instrument="ASCAT" />
 
@@ -596,102 +605,102 @@
 
     <veadr name="veadr-ntb" subclass="3" version="1" instrument="ASCAT" />
 
-    <veadr name="veadr-xcl" subclass="5" version="1" instrument="ASCAT" />
+    <veadr name="veadr-deb" subclass="4" version="1" instrument="ASCAT" />
 
-    <veadr name="veadr-osv" subclass="6" version="1" instrument="ASCAT" />
-
-	<mdr name="mdr-1b-125" subclass="1" version="3" instrument="ASCAT" description="Level 1B 12.5km resolution record">
-		<delimiter name="Quality of MDR has been degraded from nominal due to a processing degradation."/>
-		<field name="DEGRADED_INST_MDR" type="boolean" units="n/a" description="Quality of MDR has been degraded from nominal due to an instrument degradation."/>
-		<field name="DEGRADED_PROC_MDR" type="boolean" units="n/a" description="Quality of MDR has been degraded from nominal due to a processing degradation. "/>
-		<delimiter name="SWATH GRID LINE and associated data"/>
-		<field name="UTC_LINE_NODES" type="time" units="UTC" description="UTC time of line of nodes"/>
-		<field name="ABS_LINE_NUMBER" type="integer4" units="count" description="Absolute (unique) counter for the line of nodes (from format version 12.0 onwards only)"/>
-		<field name="SAT_TRACK_AZI" type="uinteger2" scaling-factor="10^2" units="deg" description="Azimuth angle bearing (range: 0 to 360) of nadir track velocity"/>
-		<field name="AS_DES_PASS" type="boolean" units="n/a" description="Ascending/descending pass indicator"/>
-		<delimiter name="NODE and associated data"/>
-		<array name="SWATH INDICATOR" length="82">
-			<field type="boolean" units="n/a" description="Swath (0=LEFT, 1=RIGHT)"/>
-		</array>
-		<array name="LATITUDE" length="82">
-			<field type="integer4" scaling-factor="10^6" units="deg" description="Latitude (-90 to 90 deg)"/>
-		</array>
-		<array name="LONGITUDE" length="82">
-			<field type="integer4" scaling-factor="10^6" units="deg" description="Longitude (0 to 360 deg)"/>
-		</array>
-		<delimiter name="TRIPLET and associated data"/>
-		<array name="SIGMA0_TRIP" length="82">
-			<array length="3">
-				<field type="integer4" scaling-factor="10^6" units="dB" description="Sigma0 triplet, re-sampled to swath grid, for 3 beams (fore, mid, aft) "/>
-			</array>
-		</array>
-		<array name="KP" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^4" units="n/a" description="Kp for re-sampled sigma0 tripplet. Values between 0 and 1"/>
-			</array>
-		</array>
-		<array name="INC_ANGLE_TRIP" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^2" units="deg" description="Incidence angle for re-sampled sigma0 tripplet."/>
-			</array>
-		</array>
-		<array name="AZI_ANGLE_TRIP" length="82">
-			<array length="3">
-				<field type="integer2" scaling-factor="10^2" units="deg" description="Incidence angle for re-sampled sigma0 tripplet. Values range from -180 to +180, where minus is west and plus is east."/>
-			</array>
-		</array>
-		<array name="NUM_VAL_TRIP" length="82">
-			<array length="3">
-				<field type="uinteger4" units="count" description="Number of full resolution sigma0 values contributing to the re-sampled sigma0 tripplet."/>
-			</array>
-		</array>
-		<array name="F_KP" length="82">
-			<array length="3">
-				<field type="boolean" units="n/a" description="Flag related to the quality of the Kp estimate (0=NOMINAL, 1=NON-NOMINAL)"/>
-			</array>
-		</array>
-		<array name="F_USABLE" length="82">
-			<array length="3">
-				<field type="uinteger1" units="n/a" description="Flag related to the usability of the sigma0 tripplet (0=GOOD, 1=USABLE, 2=NOT USABLE)"/>
-			</array>
-		</array>
-		<array name="F_F" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to non-nominal amount of input raw data to calculate echo corrections (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-		<array name="F_V" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to non enough amount of input raw data to calculate echo corrections (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-		<array name="F_OA" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to lack of accuracy of orbit/atticute knowledge (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-		<array name="F_SA" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to solar array reflection contamination (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-		<array name="F_TEL" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to non-nominal telemetry check results (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-		<array name="F_REF" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to non-nominal raw echo correction reference functions (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-		<array name="F_LAND" length="82">
-			<array length="3">
-				<field type="uinteger2" scaling-factor="10^3" units="n/a" description="Flag related to presence of land in the re-sampled sigma0 tripllet (value between 0 and 1 shows the fraction of original samples affected)"/>
-			</array>
-		</array>
-	</mdr>
-
+    <mdr name="mdr-1b-25km" subclass="1" version="2" instrument="ASCAT" description="Only used in Level 1B 25 km products">
+        <delimiter name="LINE_OF_25_KM_RES_NODES_and_associated_data"/>
+        <field name="UTC_LINE_NODES" type="time" length="6" units="UTC" description="UTC time of line of 25 km nodes"/>
+        <field name="SAT_TRACK_AZI" type="uinteger2" scaling-factor="10^2" units="deg" description="Azimuth angle bearing of nadir track velocity"/>
+        <delimiter name="25_KM_RESOLUTION_NODE_and_associated_data"/>
+        <array name="NODE_NUM" length="82" label="node">
+            <field type="integer2" units="count" description="25 km node number as used in the PGF (ref AD-2]), i.e., (20 to -20) for the left swath in the left-to-right order, (-20 to 20) for the right swath in the left-to-right order, 0 corresponding to the mid swath position in both swaths."/>
+        </array>
+        <array name="SWATH_INDICATOR" length="82" label="node">
+            <field type="boolean" description="Swath (right or left)"/>
+        </array>
+        <array name="LATITUDE" length="82" label="node">
+            <field type="integer4" scaling-factor="10^6" units="deg" description="Latitude (-90 to 90 deg)"/>
+        </array>
+        <array name="LONGITUDE" length="82" label="node">
+            <field type="integer4" scaling-factor="10^6" units="deg" description="Longitude (0 to 360 deg)"/>
+        </array>
+        <array name="ATMOSPHERIC_HEIGHT" length="82" label="node">
+            <field type="uinteger2" scaling-factor="10^3" units="km" description="Height of atmowphere used"/>
+        </array>
+        <array name="ATMOSPHERIC_LOSS" length="82" label="node">
+            <field type="uinteger4" scaling-factor="10^10" units="dB/km" description="Atmospheric loss per unit length of atmosphere"/>
+        </array>
+        <delimiter name="25_KM_RESOLUTION_TRIPLET_COMPONENT_and_associated_data"/>
+        <array name="SIGMA0_TRIP" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="integer4" scaling-factor="10^6" units="dB" description="Smoothed to 25 km spatial resolution triplet (fore, mid, aft) sigma zero values"/>
+            </array>
+        </array>
+        <array name="KP" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^4" description="Smoothed to 25 km spatial resolution triplet (fore, mid, aft) kp values (values between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="INC_ANGLE_TRIP" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^2" units="deg" description="Smoothed to 25 km spatial resolution triplet (fore, mid, aft) incidence angle values"/>
+            </array>
+        </array>
+        <array name="AZI_ANGLE_TRIP" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="integer2" scaling-factor="10^2" units="deg" description="Smoothed to 25 km spatial resolution triplet (fore, mid, aft) azimuth angle values"/>
+            </array>
+        </array>
+        <array name="F_KP" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="boolean" description="Flag related to the quality of the Kp estimate (ref. Ad-2)"/>
+            </array>
+        </array>
+        <array name="F_USABLE" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="enumerated" description="Flag related to the usability of the averaged value (ref. Ad-2)">
+                    <item value="0" name="GOOD"/>
+                    <item value="1" name="USABLE"/>
+                    <item value="2" name="NON USABLE"/>
+                </field>
+            </array>
+        </array>
+        <array name="F_F" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to the use of synthetic data in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="F_V" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to the quality of the used of synthetic data in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="F_OA" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to orbit/atticute quality in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="F_SA" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to solar array reflection contamination in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="F_TEL" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to telemtry quality in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="F_EXT_FIL" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to the presence of extrapolated reference functions in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+        <array name="F_LAND" length="82" label="node">
+            <array length="3" labels="fore,mid,aft">
+                <field type="uinteger2" scaling-factor="10^3" description="Flag related to the use of measurements over land in the generation of averaged value (ref. Ad-2) (value between 0 and 1)"/>
+            </array>
+        </array>
+    </mdr>
 
 </product>
 
