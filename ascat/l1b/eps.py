@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup, NavigableString, Comment
 
 import matplotlib.dates as mpl_dates
 
-import pygenio.genio as genio
+# import pygenio.genio as genio
 
 long_nan = -2 ** 31
 ulong_nan = 2 ** 32 - 1
@@ -1927,15 +1927,3 @@ def read_szx(filename):
     raw_data = np.array(eps_file.mdr)[:, 0]
 
     return raw_data
-
-
-def test_eps_read():
-    filename = '/home/shahn/Downloads/archive.eumetsat.int/umarf/onlinedownload/shahn/1196852/ASCA_SZR_1B_M01_20161101014200Z_20161101032358Z_N_O_20161101023052Z.nat.gz'
-    data = read_szx(filename)
-    import pdb
-    pdb.set_trace()
-
-
-if __name__ == '__main__':
-    # test_eps_read()
-    test_xml()
