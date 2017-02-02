@@ -7,7 +7,9 @@ import numpy as np
 
 
 def get_record(name):
-
+    """
+    Read xml record.
+    """
     filename = '../../formats/eps_ascatl1bszr_9.0.xml'
 
     doc = etree.parse(filename)
@@ -64,30 +66,72 @@ def get_record(name):
 
 
 def grh_record():
-
-    long_cds_time = np.dtype([('day', np.uint16),
-                              ('ms', np.uint32),
-                              ('mms', np.uint16)])
+    """
+    Generic record header.
+    """
+    short_cds_time = np.dtype([('day', np.uint16),
+                               ('time', np.uint32)])
 
     record_dtype = np.dtype([('record_class', np.ubyte),
                              ('instrument_group', np.ubyte),
                              ('record_subclass', np.ubyte),
                              ('record_subclass_version', np.ubyte),
                              ('record_size', np.uint32),
-                             ('record_start_time', long_cds_time),
-                             ('record_stop_time', long_cds_time)])
+                             ('record_start_time', short_cds_time),
+                             ('record_stop_time', short_cds_time)])
+
     return record_dtype
 
 
 def read_record(fid, dtype, count=1):
+    """
+    Read record
+    """
     record = np.fromfile(fid, dtype=dtype, count=count)
     return record.newbyteorder('B')
 
 
-def read(filename):
+def read_mphr(fid, grh):
+    """
+    Read Main Product Header (MPHR).
+    """
+    mphr = fid.read(grh['record_size'] - grh.itemsize)
+    mphr_dict = OrderedDict(item.replace(' ', '').split('=')
+                            for item in mphr.split('\n')[:-1])
 
-    record_class_dict = {1: 'MPHR', 2: 'SPHR', 3: 'IPR', 4: 'GEADR',
-                         5: 'GIADR', 6: 'VEADR', 7: 'VIADR', 8: 'MDR'}
+    product_xml_table = {'ASCA_SZF_1B_9': 'eps_ascatl1bszf_9.0.xml',
+                         'ASCA_SZR_1B_9': 'eps_ascatl1bszr_9.0.xml',
+                         'ASCA_SZO_1B_9': 'eps_ascatl1bszo_9.0.xml'}
+
+    key = '{:}_{:}_{:}_{:}'.format(mphr_dict['INSTRUMENT_ID'],
+                                   mphr_dict['PRODUCT_TYPE'],
+                                   mphr_dict['PROCESSING_LEVEL'],
+                                   mphr_dict['PROCESSOR_MAJOR_VERSION'])
+
+    print('Product: {:}'.format(key))
+
+    filename = product_xml_table[key]
+    xml_file = os.path.join('..', '..', 'formats', filename)
+
+    return xml_file
+
+
+def read_sphr(fid, grh):
+    """
+    Read Special Product Header (SPHR).
+    """
+    sphr = fid.read(grh['record_size'] - grh.itemsize)
+    sphr_dict = OrderedDict(item.replace(' ', '').split('=')
+                            for item in sphr.split('\n')[:-1])
+    print('SPHR')
+
+
+def read_eps(filename):
+    """
+    Read EPS file.
+    """
+    # record_class_dict = {1: 'MPHR', 2: 'SPHR', 3: 'IPR', 4: 'GEADR',
+    #                      5: 'GIADR', 6: 'VEADR', 7: 'VIADR', 8: 'MDR'}
 
     zipped = False
     if os.path.splitext(filename)[1] == '.gz':
@@ -108,34 +152,44 @@ def read(filename):
         # remember beginning of the record
         bor = fid.tell()
 
-        # just read grh of current dataset
+        # read grh of current record
         grh = read_record(fid, grh_record())
-
         record_size = grh['record_size'][0]
         record_class = grh['record_class'][0]
-        # print(record_class_dict[record_class], grh['record_subclass'][0],
-        #       grh['record_subclass_version'][0])
 
-        if record_class == 1 or record_class == 2:
-            mphr = fid.read(record_size - grh.itemsize)
-            mphr_dict = dict(item.replace(' ', '').split('=')
-                             for item in mphr.split('\n')[:-1])
-            import pdb
-            pdb.set_trace()
-            print('MPHR')
+        # main product header
+        if record_class == 1:
+            xml_file = read_mphr(fid, grh)
+            print(xml_file)
+
+        # specific product header
+        elif record_class == 2:
+            read_sphr(fid, grh)
+
+        # ipr
+        # elif record_class == 3:
+        #     pass
+
+        # geadr
+        # elif record_class == 4:
+        #     pass
+
+        # giadr
+        # elif record_class == 5:
+        #     pass
+
+        # veadr
+        # elif record_class == 6:
+        #     pass
+
+        # viadr
+        # elif record_class == 7:
+        #     pass
+
         else:
             # return pointer to the beginning of the record
             fid.seek(bor)
             fid.seek(record_size, 1)
-
-        # print('Record class: {:}'.format(grh['record_class']))
-        # print('Instrument group: {:}'.format(grh['instrument_group']))
-        # print('Record subclass: {:}'.format(grh['record_subclass']))
-        # print('Record subclass version: {:}'.format(
-        #     grh['record_subclass_version']))
-        # print('Record size: {:}'.format(record_size))
-        # print('Record start time: {:}'.format(grh['record_start_time']))
-        # print('Record stop time: {:}'.format(grh['record_stop_time']))
 
         # Determine number of bytes read
         eor = fid.tell()
@@ -147,6 +201,9 @@ def read(filename):
 
 
 def test_xml():
+    """
+    Test xml file.
+    """
     record_name = 'mphr'
     record_name = 'sphr'
     record_name = 'geadr-lsm'
@@ -158,11 +215,14 @@ def test_xml():
 
 
 def test_eps():
+    """
+    Test read EPS file.
+    """
     root_path = os.path.join('/home', 'shahn', 'shahn', 'datapool', 'ascat',
                              'metop_a_szr', '2016')
     filename = os.path.join(
         root_path, 'ASCA_SZR_1B_M02_20160101005700Z_20160101023858Z_N_O_20160101023812Z.nat.gz')
-    read(filename)
+    read_eps(filename)
 
 if __name__ == '__main__':
     test_eps()
