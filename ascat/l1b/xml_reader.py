@@ -3,25 +3,26 @@ import lxml.etree as etree
 from tempfile import NamedTemporaryFile
 from gzip import GzipFile
 from collections import OrderedDict
+
 import numpy as np
 
+short_cds_time = np.dtype([('day', np.uint16), ('time', np.uint32)])
 
-def get_record(name):
+long_cds_time = np.dtype([('day', np.uint16), ('ms', np.uint32),
+                          ('mms', np.uint16)])
+
+
+def read_xml_mdr(filename):
     """
     Read xml record.
     """
-    filename = '../../formats/eps_ascatl1bszr_9.0.xml'
-
     doc = etree.parse(filename)
-    elem = doc.xpath('//*[@name="{:}"]'.format(name))
-
-    elem[0].attrib.keys()
-    x = elem[0]
-
+    elements = doc.xpath('//mdr')
     data = OrderedDict()
     length = []
+    elem = elements[0]
 
-    for child in x.getchildren():
+    for child in elem.getchildren():
 
         if child.tag == 'delimiter':
             continue
@@ -49,29 +50,45 @@ def get_record(name):
                     except KeyError:
                         pass
 
-        data[name].update({'length': length})
+        if length:
+            data[name].update({'length': length})
+        else:
+            data[name].update({'length': 1})
+
         length = []
 
-    conv = {'longtime': 'i4', 'integer4': 'i4', 'uinteger2': 'i2',
-            'integer8': 'i4', 'enumerated': 'enum', 'integer2': 'i2',
-            'uinteger4': 'i4', 'uinteger1': 'i1',
-            'string': 'str', 'time': 'time', 'uinteger': 'i4',
-            'integer': 'i2', 'boolean': 'bool'}
+    conv = {'longtime': long_cds_time, 'time': short_cds_time,
+            'boolean': np.uint8, 'integer1': np.int8, 'uinteger1': np.uint8,
+            'integer': np.int32, 'uinteger': np.uint32, 'integer2': np.int16,
+            'uinteger2': np.uint16, 'integer4': np.int32,
+            'uinteger4': np.uint32, 'integer8': np.int64,
+            'enumerated': np.uint8, 'string': 'str'}
 
+    scaling_factor = []
+    scaled_dtype = []
     dtype = []
-    for key, values in data.items():
-        dtype.append((key, conv[values['type']], values['length']))
 
-    return dtype
+    for key, value in data.items():
+
+        if 'scaling-factor' in value:
+            sf_dtype = np.float32
+            sf = eval(value['scaling-factor'].replace('^', '**'))
+        else:
+            sf_dtype = conv[value['type']]
+            sf = 1
+
+        scaling_factor.append(sf)
+        scaled_dtype.append((key, sf_dtype, value['length']))
+        dtype.append((key, conv[value['type']], value['length']))
+
+    return np.dtype(dtype), np.dtype(scaled_dtype), np.array(scaling_factor,
+                                                             dtype=np.float32)
 
 
 def grh_record():
     """
     Generic record header.
     """
-    short_cds_time = np.dtype([('day', np.uint16),
-                               ('time', np.uint32)])
-
     record_dtype = np.dtype([('record_class', np.ubyte),
                              ('instrument_group', np.ubyte),
                              ('record_subclass', np.ubyte),
@@ -101,19 +118,20 @@ def read_mphr(fid, grh):
 
     product_xml_table = {'ASCA_SZF_1B_9': 'eps_ascatl1bszf_9.0.xml',
                          'ASCA_SZR_1B_9': 'eps_ascatl1bszr_9.0.xml',
-                         'ASCA_SZO_1B_9': 'eps_ascatl1bszo_9.0.xml'}
+                         'ASCA_SZO_1B_9': 'eps_ascatl1bszo_9.0.xml',
+                         'ASCA_SMR_02_4': 'eps_ascatl2smr_4.xml',
+                         'ASCA_SMR_02_5': 'eps_ascatl2smr_4.xml'}
 
     key = '{:}_{:}_{:}_{:}'.format(mphr_dict['INSTRUMENT_ID'],
                                    mphr_dict['PRODUCT_TYPE'],
                                    mphr_dict['PROCESSING_LEVEL'],
                                    mphr_dict['PROCESSOR_MAJOR_VERSION'])
 
-    print('Product: {:}'.format(key))
-
+    # print('Product: {:}'.format(key))
     filename = product_xml_table[key]
     xml_file = os.path.join('..', '..', 'formats', filename)
 
-    return xml_file
+    return xml_file, mphr_dict
 
 
 def read_sphr(fid, grh):
@@ -123,7 +141,8 @@ def read_sphr(fid, grh):
     sphr = fid.read(grh['record_size'] - grh.itemsize)
     sphr_dict = OrderedDict(item.replace(' ', '').split('=')
                             for item in sphr.split('\n')[:-1])
-    print('SPHR')
+
+    return sphr_dict
 
 
 def read_eps(filename):
@@ -132,6 +151,9 @@ def read_eps(filename):
     """
     # record_class_dict = {1: 'MPHR', 2: 'SPHR', 3: 'IPR', 4: 'GEADR',
     #                      5: 'GIADR', 6: 'VEADR', 7: 'VIADR', 8: 'MDR'}
+
+    mdr_template = None
+    mdr_list = []
 
     zipped = False
     if os.path.splitext(filename)[1] == '.gz':
@@ -153,45 +175,32 @@ def read_eps(filename):
         bor = fid.tell()
 
         # read grh of current record
-        grh = read_record(fid, grh_record())
-        record_size = grh['record_size'][0]
-        record_class = grh['record_class'][0]
+        grh = read_record(fid, grh_record())[0]
+        record_size = grh['record_size']
+        record_class = grh['record_class']
 
-        # main product header
         if record_class == 1:
-            xml_file = read_mphr(fid, grh)
-            print(xml_file)
+            xml_file, mphr = read_mphr(fid, grh)
+            mdr_template, scaled_template, sfactor = read_xml_mdr(xml_file)
+            continue
 
-        # specific product header
-        elif record_class == 2:
+        if record_class == 2:
             read_sphr(fid, grh)
+            continue
 
-        # ipr
-        # elif record_class == 3:
-        #     pass
+        # mdr
+        if record_class == 8:
+            import pdb
+            pdb.set_trace()
+            mdr = read_record(fid, mdr_template)
+            mdr_list.append(mdr)
 
-        # geadr
-        # elif record_class == 4:
-        #     pass
+        # return pointer to the beginning of the record
+        fid.seek(bor)
+        fid.seek(record_size, 1)
 
-        # giadr
-        # elif record_class == 5:
-        #     pass
-
-        # veadr
-        # elif record_class == 6:
-        #     pass
-
-        # viadr
-        # elif record_class == 7:
-        #     pass
-
-        else:
-            # return pointer to the beginning of the record
-            fid.seek(bor)
-            fid.seek(record_size, 1)
-
-        # Determine number of bytes read
+        # determine number of bytes read
+        # end of record
         eor = fid.tell()
 
     fid.close()
@@ -199,19 +208,16 @@ def read_eps(filename):
     if zipped:
         os.remove(filename)
 
+    data = np.hstack(mdr_list)
+    sc_data = np.zeros_like(data, dtype=scaled_template)
 
-def test_xml():
-    """
-    Test xml file.
-    """
-    record_name = 'mphr'
-    record_name = 'sphr'
-    record_name = 'geadr-lsm'
-    record_name = 'viadr-oa'
-    record_name = 'viadr-ver'
-    record_name = 'veadr - prc'
-    record_name = 'mdr-1b-125'
-    print(get_record(record_name))
+    for name, sf in zip(data.dtype.names, sfactor):
+        if sf != 1:
+            sc_data[name] = data[name] / sf
+        else:
+            sc_data[name] = data[name]
+
+    return sc_data
 
 
 def test_eps():
@@ -222,7 +228,27 @@ def test_eps():
                              'metop_a_szr', '2016')
     filename = os.path.join(
         root_path, 'ASCA_SZR_1B_M02_20160101005700Z_20160101023858Z_N_O_20160101023812Z.nat.gz')
-    read_eps(filename)
+
+    root_path = os.path.join('/home', 'shahn', 'shahn', 'datapool', 'ascat',
+                             'ascat_test_data_for_readers', 'umarf',
+                             'onlinedownload', 'shahn', '1196858')
+
+    filename = os.path.join(
+        root_path, 'ASCA_SZF_1B_M01_20161101014200Z_20161101032359Z_N_O_20161101023050Z.nat.gz')
+
+    root_path = os.path.join('/home', 'shahn', 'shahn', 'datapool', 'ascat',
+                             'ascat_test_data_for_readers', 'umarf',
+                             'onlinedownload', 'shahn', '1196868')
+
+    filename = os.path.join(
+        root_path, 'ASCA_SMR_02_M01_20161101032400Z_20161101050558Z_N_O_20161101041358Z.nat.gz')
+
+    data = read_eps(filename)
+
+    import pdb
+    pdb.set_trace()
+    pass
+
 
 if __name__ == '__main__':
     test_eps()
