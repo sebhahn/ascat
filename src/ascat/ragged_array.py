@@ -376,7 +376,8 @@ class MultidimArray:
     def __init__(self,
                  ds: xr.Dataset,
                  instance_dim: str = "loc",
-                 element_dim: str = "time"):
+                 element_dim: str = "time",
+                 instance_id_var: str = None):
         """
         Initialize.
 
@@ -388,28 +389,61 @@ class MultidimArray:
             Instance dimension name.
         element_dim : str
             Element dimension name.
+        instance_id_var : str, optional
+            Variable holding the instance identifiers (e.g. "location_id") when
+            they are not stored on the instance dimension. If None, the instance
+            dimension coordinate is used, or a positional 0..N-1 index.
         """
         self.instance_dim = instance_dim
         self.element_dim = element_dim
+        self.instance_id_var = instance_id_var
         self._data = ds
         self.validate()
+        self._set_instance_lut()
 
     def validate(self):
         """Validate format."""
         verify_multidim(self.ds, self.instance_dim, self.element_dim)
 
+    def _set_instance_lut(self):
+        """Set instance lookup-table mapping instance ids to positions."""
+        if self.instance_id_var is not None:
+            instance_ids = self.ds[self.instance_id_var].to_numpy()
+        elif self.instance_dim in self.ds:
+            instance_ids = self.ds[self.instance_dim].to_numpy()
+        else:
+            instance_ids = np.arange(self.ds.sizes[self.instance_dim])
+        self._lookup = _InstanceLookup(instance_ids)
+
     @property
     def ds(self):
         return self._data
 
-    def sel_instance(self, instance_id: int):
-        """Read time series"""
-        return self.ds.sel({self.instance_dim: instance_id})
+    @property
+    def size(self) -> int:
+        """Number of instances."""
+        return self.ds.sizes[self.instance_dim]
+
+    @property
+    def instance_ids(self):
+        """Instance ids."""
+        if self.instance_id_var is not None:
+            return self.ds[self.instance_id_var].values
+        if self.instance_dim in self.ds:
+            return self.ds[self.instance_dim].values
+        return np.arange(self.ds.sizes[self.instance_dim])
+
+    def sel_instance(self, i: int):
+        """Read time series for a given instance id."""
+        pos = int(self._lookup.positions(i)[0])
+        if pos == -1:
+            return None
+        return self.ds.isel({self.instance_dim: pos})
 
     def __iter__(self):
         """Iterator over time series"""
-        for instance in self.ds[self.instance_dim]:
-            yield self.sel_instance(instance)
+        for i in self.instance_ids:
+            yield self.sel_instance(i)
 
     def iter(self):
         """Explicit iterator method"""
@@ -434,7 +468,11 @@ class MultidimArray:
             Contiguous ragged array time series.
         """
         new_ds = self._to_contiguous_ds(count_var, sample_dim)
-        return ContiguousRaggedArray(new_ds, count_var, self.instance_dim)
+        instance_id_var = (
+            self.instance_id_var
+            if self.instance_id_var in new_ds else None)
+        return ContiguousRaggedArray(new_ds, count_var, self.instance_dim,
+                                     instance_id_var=instance_id_var)
 
     def to_indexed(self, count_var: str = "row_size",
                    sample_dim: str = "obs", index_var: str = "locationIndex"):
@@ -472,6 +510,36 @@ class IncompleteMultidimArray(MultidimArray):
     dtype fill value. The element dimension is a positional index.
     """
 
+    @classmethod
+    def from_file(cls,
+                  filename: str,
+                  instance_dim: str = "locations",
+                  element_dim: str = "time",
+                  instance_id_var: str = None,
+                  **kwargs):
+        """
+        Load an incomplete multidimensional array from a file.
+
+        Parameters
+        ----------
+        filename : str
+            Filename.
+        instance_dim : str, optional
+            Instance dimension name (default: "locations").
+        element_dim : str, optional
+            Element dimension name (default: "time").
+        instance_id_var : str, optional
+            Variable used as instance identifier (default: None).
+
+        Returns
+        -------
+        data : IncompleteMultidimArray
+            Incomplete multidimensional array loaded from a file.
+        """
+        ds = xr.open_dataset(filename, **kwargs)
+        return cls(ds, instance_dim, element_dim,
+                   instance_id_var=instance_id_var)
+
     def _to_contiguous_ds(self, count_var, sample_dim):
         return incomplete_to_contiguous(
             self.ds,
@@ -501,9 +569,44 @@ class OrthogonalMultidimArray(MultidimArray):
                  ds: xr.Dataset,
                  instance_dim: str = "loc",
                  element_dim: str = "time",
-                 element_coord: str = None):
+                 element_coord: str = None,
+                 instance_id_var: str = None):
         self.element_coord = element_coord or element_dim
-        super().__init__(ds, instance_dim, element_dim)
+        super().__init__(ds, instance_dim, element_dim,
+                         instance_id_var=instance_id_var)
+
+    @classmethod
+    def from_file(cls,
+                  filename: str,
+                  instance_dim: str = "locations",
+                  element_dim: str = "time",
+                  element_coord: str = None,
+                  instance_id_var: str = None,
+                  **kwargs):
+        """
+        Load an orthogonal multidimensional array from a file.
+
+        Parameters
+        ----------
+        filename : str
+            Filename.
+        instance_dim : str, optional
+            Instance dimension name (default: "locations").
+        element_dim : str, optional
+            Element dimension name (default: "time").
+        element_coord : str, optional
+            Shared element coordinate variable name (default: element_dim).
+        instance_id_var : str, optional
+            Variable used as instance identifier (default: None).
+
+        Returns
+        -------
+        data : OrthogonalMultidimArray
+            Orthogonal multidimensional array loaded from a file.
+        """
+        ds = xr.open_dataset(filename, **kwargs)
+        return cls(ds, instance_dim, element_dim, element_coord=element_coord,
+                   instance_id_var=instance_id_var)
 
     def _to_contiguous_ds(self, count_var, sample_dim):
         return orthogonal_to_contiguous(
@@ -619,6 +722,7 @@ class ContiguousRaggedArray:
                   count_var: str,
                   instance_dim: str,
                   instance_id_var: str = None,
+                  trim: bool = False,
                   **kwargs):
         """
         Load time series from file.
@@ -633,6 +737,8 @@ class ContiguousRaggedArray:
             Instance dimension name.
         instance_id_var: str, optional
             Variable used as instance identifier (default: None).
+        trim : bool, optional
+            If True, drop fill/padding locations after loading (default: False).
 
         Returns
         -------
@@ -642,7 +748,8 @@ class ContiguousRaggedArray:
         ds = xr.open_dataset(filename, **kwargs)
         verify_contiguous_ragged(ds, count_var, instance_dim)
 
-        return cls(ds, count_var, instance_dim, instance_id_var)
+        data = cls(ds, count_var, instance_dim, instance_id_var)
+        return data.trim() if trim else data
 
     @property
     def ds(self):
@@ -763,6 +870,39 @@ class ContiguousRaggedArray:
             self.instance_dim: pos,
         })
 
+    def trim(self):
+        """
+        Drop fill/padding locations.
+
+        Cell files often over-allocate the instance dimension and pad the unused
+        locations with fill values (a negative fill for the integer count
+        variable). This removes those locations and keeps only the observations
+        belonging to real ones. Locations with a valid count of zero are kept.
+
+        Returns
+        -------
+        data : ContiguousRaggedArray
+            Trimmed contiguous ragged array (self if nothing to trim).
+        """
+        valid = self._row_size >= 0
+        if bool(valid.all()):
+            return self
+
+        clamped = np.where(valid, self._row_size, 0)
+        starts = np.cumsum(clamped) - clamped
+        sample_idx = np.concatenate(
+            [np.arange(s, s + c)
+             for s, c, v in zip(starts, clamped, valid) if v]
+        ) if valid.any() else np.array([], dtype=np.int64)
+
+        ds = self.ds.isel({
+            self.sample_dim: sample_idx,
+            self.instance_dim: valid,
+        })
+        return ContiguousRaggedArray(
+            ds, self.count_var, self.instance_dim,
+            instance_id_var=self.instance_id_var)
+
     def __iter__(self):
         """
         Iterator over instances.
@@ -803,7 +943,8 @@ class ContiguousRaggedArray:
         ds = contiguous_to_indexed(self.ds, self.sample_dim, self.instance_dim,
                                    self.count_var, index_var)
 
-        return IndexedRaggedArray(ds, index_var, self.sample_dim)
+        return IndexedRaggedArray(ds, index_var, self.sample_dim,
+                                  instance_id_var=self.instance_id_var)
 
     def to_incomplete(self):
         """
@@ -942,7 +1083,8 @@ class IndexedRaggedArray:
         Yield time series for each instance.
     """
 
-    def __init__(self, ds: xr.Dataset, index_var: str, sample_dim: str):
+    def __init__(self, ds: xr.Dataset, index_var: str, sample_dim: str,
+                 instance_id_var: str = None):
         """
         Initialize.
 
@@ -954,9 +1096,14 @@ class IndexedRaggedArray:
             Index variable name.
         sample_dim : str
             Sample dimension name.
+        instance_id_var : str, optional
+            Variable holding the instance identifiers (e.g. "location_id") when
+            they are not stored on the instance dimension. If None, the instance
+            dimension coordinate is used, or a positional 0..N-1 index.
         """
         self.index_var = index_var
         self.sample_dim = sample_dim
+        self.instance_id_var = instance_id_var
         self._data = ds.set_coords(self.index_var).set_xindex(self.index_var)
         self.validate()
 
@@ -978,14 +1125,17 @@ class IndexedRaggedArray:
         Uses a binary-search lookup over the sorted instance ids, so memory
         scales with the number of instances rather than the largest id value.
         """
-        if self.instance_dim in self.ds:
+        if self.instance_id_var is not None:
+            instance_ids = self.ds[self.instance_id_var].to_numpy()
+        elif self.instance_dim in self.ds:
             instance_ids = self.ds[self.instance_dim].to_numpy()
         else:
             instance_ids = np.unique(self.ds[self.index_var])
         self._lookup = _InstanceLookup(instance_ids)
 
     @classmethod
-    def from_file(cls, filename: str, index_var: str, sample_dim: str):
+    def from_file(cls, filename: str, index_var: str, sample_dim: str,
+                  instance_id_var: str = None):
         """
         Read data from file.
 
@@ -997,6 +1147,8 @@ class IndexedRaggedArray:
             Index variable name.
         sample_dim : str
             Sample dimension name.
+        instance_id_var : str, optional
+            Variable holding the instance identifiers (default: None).
 
         Returns
         -------
@@ -1005,7 +1157,7 @@ class IndexedRaggedArray:
         """
         ds = xr.open_dataset(filename)
         verify_indexed_ragged(ds, index_var, sample_dim)
-        return cls(ds, index_var, sample_dim)
+        return cls(ds, index_var, sample_dim, instance_id_var=instance_id_var)
 
     def save(self, filename: str):
         """
@@ -1060,6 +1212,8 @@ class IndexedRaggedArray:
         instance_ids : list of int
             Instance ids.
         """
+        if self.instance_id_var is not None:
+            return self.ds[self.instance_id_var].values
         return self.ds[self.instance_dim].values
 
     @property
@@ -1089,14 +1243,15 @@ class IndexedRaggedArray:
 
         Returns
         -------
-        ds : xr.Dataset
-            Time series for instance.
+        ds : xr.Dataset or None
+            Time series for instance, or None if the instance is not present.
         """
         pos = int(self._lookup.positions(i)[0])
-        data = self.ds.sel({
-            self.index_var: pos,
-            self.instance_dim: i
-        })
+        if pos == -1:
+            return None
+        # select the samples of this instance and the instance-level data by
+        # position (the instance dimension need not carry a coordinate)
+        data = self.ds.sel({self.index_var: pos}).isel({self.instance_dim: pos})
 
         # reset index variable or drop index variable (my preference)?
         data[self.index_var] = (self.sample_dim,
@@ -1143,12 +1298,14 @@ class IndexedRaggedArray:
         new_index = _InstanceLookup(positions).positions(
             data[self.index_var].values)
         data[self.index_var] = (self.sample_dim, new_index)
-        data = data.sel({self.instance_dim: i})
+        # select the instance-level data by position (request order)
+        data = data.isel({self.instance_dim: positions})
 
         # copy attributes
         data[self.index_var].attrs = self.ds[self.index_var].attrs
 
-        return IndexedRaggedArray(data, self.index_var, self.sample_dim)
+        return IndexedRaggedArray(data, self.index_var, self.sample_dim,
+                                  instance_id_var=self.instance_id_var)
 
     def __iter__(self) -> xr.Dataset:
         """
@@ -1191,7 +1348,8 @@ class IndexedRaggedArray:
         ds = indexed_to_contiguous(self.ds, self.sample_dim, self.instance_dim,
                                    count_var, self.index_var)
 
-        return ContiguousRaggedArray(ds, count_var, self.instance_dim)
+        return ContiguousRaggedArray(ds, count_var, self.instance_dim,
+                                     instance_id_var=self.instance_id_var)
 
     def to_incomplete(self) -> "IncompleteMultidimArray":
         """

@@ -242,6 +242,78 @@ def test_indexed_large_sparse_ids_selection():
     np.testing.assert_array_equal(sel.instance_ids, [6_599_999, 10])
 
 
+def h120_like_ds():
+    """Contiguous ragged like an ASCAT H120 cell file: the instance identifier
+    is a separate 'location_id' variable, and the instance dimension carries no
+    coordinate of its own."""
+    rs = np.array([2, 1, 3], dtype=np.int64)
+    n = int(rs.sum())
+    return xr.Dataset(
+        {
+            "row_size": ((INSTANCE_DIM,), rs, {"sample_dimension": SAMPLE_DIM}),
+            "location_id": ((INSTANCE_DIM,),
+                            np.array([2955040, 1_549_346, 6_599_999],
+                                     dtype=np.int64)),
+            "lon": ((INSTANCE_DIM,), np.array([1., 2., 3.], dtype="float32")),
+            "sm": ((SAMPLE_DIM,), np.arange(n, dtype="float32")),
+        },
+    )
+
+
+def test_instance_id_var_read_and_convert():
+    ids = np.array([2955040, 1_549_346, 6_599_999])
+    cra = ContiguousRaggedArray(h120_like_ds(), "row_size", INSTANCE_DIM,
+                                instance_id_var="location_id")
+    np.testing.assert_array_equal(cra.instance_ids, ids)
+    np.testing.assert_array_equal(cra.sel_instance(6_599_999)["sm"].values,
+                                  [3., 4., 5.])
+
+    # to_indexed must carry instance_id_var so id-based selection survives
+    idx = cra.to_indexed()
+    assert idx.instance_id_var == "location_id"
+    np.testing.assert_array_equal(idx.instance_ids, ids)
+    np.testing.assert_array_equal(idx.sel_instance(6_599_999)["sm"].values,
+                                  [3., 4., 5.])
+
+    # and back to contiguous
+    back = idx.to_contiguous()
+    assert back.instance_id_var == "location_id"
+    np.testing.assert_array_equal(back.sel_instance(2955040)["sm"].values,
+                                  [0., 1.])
+
+
+def test_trim_fill_locations():
+    # cell over-allocates locations; unused ones are padded with fill values
+    rs = np.array([2, 1, 3], dtype=np.int64)
+    n = int(rs.sum())
+    # append two fill/padding locations (negative fill count, fill id)
+    rs_padded = np.concatenate([rs, [np.iinfo(np.int64).min] * 2])
+    ids_padded = np.concatenate([[10, 20, 30],
+                                 [np.iinfo(np.int64).min] * 2])
+    ds = xr.Dataset(
+        {
+            "row_size": ((INSTANCE_DIM,), rs_padded,
+                         {"sample_dimension": SAMPLE_DIM}),
+            "location_id": ((INSTANCE_DIM,), ids_padded),
+            "v": ((SAMPLE_DIM,), np.arange(n, dtype="float32")),
+        },
+    )
+    cra = ContiguousRaggedArray(ds, "row_size", INSTANCE_DIM,
+                                instance_id_var="location_id")
+    assert cra.size == 5
+    trimmed = cra.trim()
+    assert trimmed.size == 3
+    np.testing.assert_array_equal(trimmed.ds["row_size"].values, rs)
+    np.testing.assert_array_equal(trimmed.instance_ids, [10, 20, 30])
+    # all real observations kept, and still selectable
+    assert trimmed.ds.sizes[SAMPLE_DIM] == n
+    np.testing.assert_array_equal(trimmed.sel_instance(30)["v"].values,
+                                  [3., 4., 5.])
+    # a fully-valid array is returned unchanged
+    assert ContiguousRaggedArray(
+        contiguous_ds(), COUNT_VAR, INSTANCE_DIM).trim().size == 3
+
+
 def test_instance_id_vs_positional_index_modes():
     # MODE 1: the instance dimension carries real location_ids
     cra_id = ContiguousRaggedArray(big_sparse_contiguous_ds(), COUNT_VAR,
