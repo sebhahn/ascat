@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from ascat.cf_conversions import point_to_indexed
+from ascat.cf_conversions import point_to_contiguous
 from ascat.cf_conversions import indexed_to_contiguous
 from ascat.cf_conversions import contiguous_to_indexed
 from ascat.cf_conversions import contiguous_to_point
@@ -15,6 +17,22 @@ from ascat.cf_conversions import contiguous_to_incomplete
 from ascat.cf_conversions import incomplete_to_contiguous
 from ascat.cf_conversions import contiguous_to_orthogonal
 from ascat.cf_conversions import orthogonal_to_contiguous
+from ascat.cf_conversions import detect_cf_representation
+from ascat.cf_conversions import finalize_cf
+
+
+def _save_cf(ds: xr.Dataset, filename: str, feature_type: str,
+             instance_id_var: str = None):
+    """Finalize CF metadata and write a dataset to NetCDF or Zarr."""
+    ds = finalize_cf(ds, feature_type, instance_id_var=instance_id_var)
+    suffix = Path(filename).suffix
+    if suffix == ".nc":
+        ds.to_netcdf(filename)
+    elif suffix == ".zarr":
+        ds.to_zarr(filename)
+    else:
+        raise ValueError(f"Unknown file suffix '{suffix}' "
+                         "(.nc and .zarr supported)")
 
 
 class _InstanceLookup:
@@ -214,11 +232,50 @@ class PointData:
         """Validate format."""
         verify_point_array(self.ds, self.sample_dim)
 
+    @classmethod
+    def from_file(cls, filename: str, sample_dim: str = None, **kwargs):
+        """
+        Load point data from a file.
+
+        Parameters
+        ----------
+        filename : str
+            Filename.
+        sample_dim : str, optional
+            Sample dimension name (inferred from the file if not given).
+
+        Returns
+        -------
+        data : PointData
+            Point data loaded from a file.
+        """
+        ds = xr.open_dataset(filename, **kwargs)
+        return cls(ds, sample_dim or _infer_sample_dim(ds))
+
     @property
     def ds(self):
         return self._data
 
-    def to_indexed(self, index_var: str = "obs", instance_dim: str = "loc"):
+    def save(self, filename: str):
+        """Write point data to file (".nc" or ".zarr") with CF metadata."""
+        _save_cf(self.ds, filename, "point")
+
+    def append(self, other):
+        """
+        Append point data along the sample dimension (in place).
+
+        Parameters
+        ----------
+        other : PointData or xarray.Dataset
+            Point data to append. It must follow the same point structure (all
+            variables over the sample dimension).
+        """
+        ds = other.ds if isinstance(other, PointData) else other
+        verify_point_array(ds, self.sample_dim)
+        self._data = xr.concat([self._data, ds], dim=self.sample_dim)
+
+    def to_indexed(self, index_var: str = "locationIndex",
+                   instance_dim: str = "locations"):
         """
         Convert point data to indexed ragged array.
 
@@ -238,25 +295,15 @@ class PointData:
             raise ValueError(
                 f"'{instance_dim}' must be a coordinate in the dataset")
 
-        instance_ids, inverse_index = np.unique(
-            self.ds[instance_dim], return_inverse=True)
-
-        # create index variable (mapping each sample to its instance)
-        index_data = xr.DataArray(
-            inverse_index,
-            dims=(self.sample_dim,),
-            attrs={"instance_dimension": instance_dim})
-
-        new_ds = self.ds.copy()
-        new_ds[index_var] = index_data
-        new_ds = new_ds.assign_coords({instance_dim: instance_ids})
-
+        new_ds = point_to_indexed(
+            self.ds, self.sample_dim, instance_dim, instance_dim,
+            index_var=index_var, coord_vars=[instance_dim])
         return IndexedRaggedArray(
             new_ds, index_var=index_var, sample_dim=self.sample_dim)
 
     def to_contiguous(self,
                       count_var: str = "row_size",
-                      instance_dim: str = "loc"):
+                      instance_dim: str = "locations"):
         """
         Convert point data to contiguous ragged array.
 
@@ -265,7 +312,7 @@ class PointData:
         count_var : str
             Name of the new count variable to be added (default: 'row_size').
         instance_dim : str
-            Name of the instance dimension (default: 'loc').
+            Name of the instance dimension (default: 'locations').
 
         Returns
         -------
@@ -276,32 +323,15 @@ class PointData:
             raise ValueError(
                 f"'{instance_dim}' must be a coordinate in the dataset")
 
-        group = self.ds.groupby(self.ds[instance_dim])
-        row_sizes = group.groups
-        instance_ids = list(row_sizes.keys())
-        counts = np.array([len(row_sizes[i]) for i in instance_ids])
-
-        sort_index = np.argsort(self.ds[instance_dim].values)
-        sorted_ds = self.ds.isel({self.sample_dim: sort_index})
-
-        count_data = xr.DataArray(
-            counts,
-            dims=(instance_dim,),
-            attrs={"sample_dimension": self.sample_dim})
-
-        new_ds = sorted_ds.copy()
-        new_ds[count_var] = count_data
-
-        if instance_dim in new_ds.coords:
-            new_ds = new_ds.assign_coords(
-                {instance_dim: np.array(instance_ids)})
-
+        new_ds = point_to_contiguous(
+            self.ds, self.sample_dim, instance_dim, instance_dim,
+            count_var=count_var, coord_vars=[instance_dim])
         return ContiguousRaggedArray(
             new_ds, count_var=count_var, instance_dim=instance_dim)
 
     def to_incomplete(self,
                       count_var: str = "row_size",
-                      instance_dim: str = "loc"):
+                      instance_dim: str = "locations"):
         """
         Convert point data to an incomplete multidimensional array (CF 9.3.2).
 
@@ -310,7 +340,7 @@ class PointData:
         count_var : str, optional
             Name of the intermediate count variable (default: "row_size").
         instance_dim : str, optional
-            Name of the instance dimension (default: "loc").
+            Name of the instance dimension (default: "locations").
 
         Returns
         -------
@@ -323,7 +353,7 @@ class PointData:
     def to_orthogonal(self,
                       element_coord: str,
                       count_var: str = "row_size",
-                      instance_dim: str = "loc",
+                      instance_dim: str = "locations",
                       element_dim: str = None,
                       strict: bool = True):
         """
@@ -336,7 +366,7 @@ class PointData:
         count_var : str, optional
             Name of the intermediate count variable (default: "row_size").
         instance_dim : str, optional
-            Name of the instance dimension (default: "loc").
+            Name of the instance dimension (default: "locations").
         element_dim : str, optional
             Name of the resulting element dimension (default: ``element_coord``).
         strict : bool, optional
@@ -375,7 +405,7 @@ class MultidimArray:
 
     def __init__(self,
                  ds: xr.Dataset,
-                 instance_dim: str = "loc",
+                 instance_dim: str = "locations",
                  element_dim: str = "time",
                  instance_id_var: str = None):
         """
@@ -419,6 +449,11 @@ class MultidimArray:
     def ds(self):
         return self._data
 
+    def save(self, filename: str):
+        """Write to file (".nc" or ".zarr") with CF metadata finalized."""
+        _save_cf(self.ds, filename, "timeSeries",
+                 instance_id_var=self.instance_id_var)
+
     @property
     def size(self) -> int:
         """Number of instances."""
@@ -433,12 +468,52 @@ class MultidimArray:
             return self.ds[self.instance_dim].values
         return np.arange(self.ds.sizes[self.instance_dim])
 
+    @property
+    def instance_variables(self) -> list:
+        """
+        Instance variables (dimensioned by the instance dimension only, i.e.
+        the per-instance metadata such as lon/lat/location_id).
+
+        Returns
+        -------
+        instance_variables : list of str
+            Instance variable names.
+        """
+        return [
+            var for var in self.ds.variables
+            if (self.ds[var].dims == (self.instance_dim,)) and
+            (var != self.instance_dim) and
+            ("sample_dimension" not in self.ds[var].attrs)
+        ]
+
+    def _wrap(self, ds: xr.Dataset):
+        """Wrap a subset dataset in a new array of the same type."""
+        return type(self)(ds, self.instance_dim, self.element_dim,
+                          instance_id_var=self.instance_id_var)
+
     def sel_instance(self, i: int):
         """Read time series for a given instance id."""
         pos = int(self._lookup.positions(i)[0])
         if pos == -1:
             return None
         return self.ds.isel({self.instance_dim: pos})
+
+    def sel_instances(self, i: np.ndarray):
+        """
+        Select several instances, preserving request order.
+
+        Returns
+        -------
+        data : MultidimArray or None
+            A multidimensional array with the selected instances, or None if
+            none of the ids are present.
+        """
+        i = np.atleast_1d(np.asarray(i))
+        pos = self._lookup.positions(i)
+        pos = pos[pos != -1]
+        if pos.size == 0:
+            return None
+        return self._wrap(self.ds.isel({self.instance_dim: pos}))
 
     def __iter__(self):
         """Iterator over time series"""
@@ -452,6 +527,29 @@ class MultidimArray:
     def apply(self, func):
         """Apply a function to each instance time series."""
         return [func(ts) for ts in self]
+
+    def append(self, other):
+        """
+        Append another multidimensional array (in place).
+
+        The two collections are merged by instance via a contiguous ragged
+        array (observations of shared instances are combined, new instances
+        added), then converted back to this representation.
+
+        Parameters
+        ----------
+        other : MultidimArray or xarray.Dataset
+            Multidimensional array to append (same structure).
+        """
+        other_ds = other.ds if isinstance(other, MultidimArray) else other
+        cra = self.to_contiguous()
+        cra.append(self._wrap(other_ds).to_contiguous())
+        self._data = self._from_contiguous(cra).ds
+        self._set_instance_lut()
+
+    def _from_contiguous(self, cra):
+        """Subclass hook: build this representation from a contiguous array."""
+        raise NotImplementedError
 
     def _to_contiguous_ds(self, count_var, sample_dim):
         """Subclass hook: convert to a contiguous ragged array dataset."""
@@ -540,6 +638,9 @@ class IncompleteMultidimArray(MultidimArray):
         return cls(ds, instance_dim, element_dim,
                    instance_id_var=instance_id_var)
 
+    def _from_contiguous(self, cra):
+        return cra.to_incomplete()
+
     def _to_contiguous_ds(self, count_var, sample_dim):
         return incomplete_to_contiguous(
             self.ds,
@@ -567,7 +668,7 @@ class OrthogonalMultidimArray(MultidimArray):
 
     def __init__(self,
                  ds: xr.Dataset,
-                 instance_dim: str = "loc",
+                 instance_dim: str = "locations",
                  element_dim: str = "time",
                  element_coord: str = None,
                  instance_id_var: str = None):
@@ -607,6 +708,17 @@ class OrthogonalMultidimArray(MultidimArray):
         ds = xr.open_dataset(filename, **kwargs)
         return cls(ds, instance_dim, element_dim, element_coord=element_coord,
                    instance_id_var=instance_id_var)
+
+    def _wrap(self, ds: xr.Dataset) -> "OrthogonalMultidimArray":
+        """Wrap a subset dataset, preserving the shared element coordinate."""
+        return OrthogonalMultidimArray(
+            ds, self.instance_dim, self.element_dim,
+            element_coord=self.element_coord,
+            instance_id_var=self.instance_id_var)
+
+    def _from_contiguous(self, cra):
+        return cra.to_orthogonal(self.element_coord,
+                                 element_dim=self.element_dim, strict=False)
 
     def _to_contiguous_ds(self, count_var, sample_dim):
         return orthogonal_to_contiguous(
@@ -653,7 +765,9 @@ class ContiguousRaggedArray:
     ds : xarray.Dataset
         Contiguous ragged array dataset.
     instance_variables : list
-        List of instance variables.
+        Per-instance metadata variables (over the instance dimension).
+    observation_variables : list
+        Measurement variables (over the sample dimension).
     instance_ids : list
         List of instance ids.
 
@@ -763,8 +877,13 @@ class ContiguousRaggedArray:
         """
         return self._data
 
+    def save(self, filename: str):
+        """Write to file (".nc" or ".zarr") with CF metadata finalized."""
+        _save_cf(self.ds, filename, "timeSeries",
+                 instance_id_var=self.instance_id_var)
+
     @property
-    def size(self) -> list:
+    def size(self) -> int:
         """
         Number of instances.
 
@@ -790,12 +909,31 @@ class ContiguousRaggedArray:
     @property
     def instance_variables(self) -> list:
         """
-        Instance variables.
+        Instance variables (dimensioned by the instance dimension only, i.e.
+        the per-instance metadata such as lon/lat/location_id).
 
         Returns
         -------
         instance_variables : list of str
-            Instance variables.
+            Instance variable names.
+        """
+        return [
+            var for var in self.ds.variables
+            if (self.ds[var].dims == (self.instance_dim,)) and
+            (var != self.instance_dim) and
+            ("sample_dimension" not in self.ds[var].attrs)
+        ]
+
+    @property
+    def observation_variables(self) -> list:
+        """
+        Observation variables (dimensioned by the sample dimension, i.e. the
+        measurements that vary per observation).
+
+        Returns
+        -------
+        observation_variables : list of str
+            Observation variable names.
         """
         return [
             var for var in self.ds.variables
@@ -803,30 +941,26 @@ class ContiguousRaggedArray:
             (var != self.sample_dim)
         ]
 
-    def get_instance_variables(self, include_dtype: bool = False) -> list:
+    def get_observation_variables(self, include_dtype: bool = False) -> list:
         """
-        Instance variables.
+        Observation variables, optionally with their dtypes.
+
+        Parameters
+        ----------
+        include_dtype : bool, optional
+            If True, return ``(name, dtype)`` tuples (default: False).
 
         Returns
         -------
-        instance_variables : list of str
-            Instance variables.
+        observation_variables : list of str or list of (str, dtype)
+            Observation variable names (dimensioned by the sample dimension).
         """
         if include_dtype:
-            instance_variables = [
+            return [
                 (var, self.ds[var].dtype)
-                for var in self.ds.variables
-                if (self.ds[var].dims == (self.sample_dim,)) and
-                (var != self.sample_dim)
+                for var in self.observation_variables
             ]
-        else:
-            instance_variables = [
-                var for var in self.ds.variables
-                if (self.ds[var].dims == (self.sample_dim,)) and
-                (var != self.sample_dim)
-            ]
-
-        return instance_variables
+        return self.observation_variables
 
     def sel_instance(self, i: int):
         """Read time series"""
@@ -840,9 +974,14 @@ class ContiguousRaggedArray:
             self.instance_dim: idx,
         })
 
-    def sel_instances(self, i: np.ndarray) -> xr.Dataset:
+    def _wrap(self, ds: xr.Dataset) -> "ContiguousRaggedArray":
+        """Wrap a subset dataset in a new ContiguousRaggedArray."""
+        return ContiguousRaggedArray(ds, self.count_var, self.instance_dim,
+                                     instance_id_var=self.instance_id_var)
+
+    def sel_instances(self, i: np.ndarray) -> "ContiguousRaggedArray":
         """
-        Read time series for the given instance IDs, preserving request order.
+        Select several instances, preserving request order.
 
         Parameters
         ----------
@@ -851,9 +990,9 @@ class ContiguousRaggedArray:
 
         Returns
         -------
-        ds : xr.Dataset or None
-            Dataset with the selected instances' samples (concatenated in the
-            order of ``i``), or None if none of the ids are present.
+        data : ContiguousRaggedArray or None
+            A contiguous ragged array with the selected instances (in the order
+            of ``i``), or None if none of the ids are present.
         """
         i = np.atleast_1d(np.asarray(i))
         pos = self._lookup.positions(i)
@@ -865,10 +1004,10 @@ class ContiguousRaggedArray:
         ends = starts + self._row_size[pos]
         sample_idx = np.concatenate(
             [np.arange(s, e) for s, e in zip(starts, ends)])
-        return self.ds.isel({
+        return self._wrap(self.ds.isel({
             self.sample_dim: sample_idx,
             self.instance_dim: pos,
-        })
+        }))
 
     def trim(self):
         """
@@ -971,7 +1110,8 @@ class ContiguousRaggedArray:
             instance_id_var=instance_id_var,
         )
         return IncompleteMultidimArray(
-            reshaped_ds, self.instance_dim, self.sample_dim)
+            reshaped_ds, self.instance_dim, self.sample_dim,
+            instance_id_var=self.instance_id_var)
 
     def to_orthogonal(self, element_coord: str, element_dim: str = None,
                       strict: bool = True):
@@ -1014,7 +1154,8 @@ class ContiguousRaggedArray:
         )
         return OrthogonalMultidimArray(
             reshaped_ds, self.instance_dim, element_dim,
-            element_coord=element_coord)
+            element_coord=element_coord,
+            instance_id_var=self.instance_id_var)
 
     def to_point_data(self):
         """
@@ -1033,10 +1174,43 @@ class ContiguousRaggedArray:
         return PointData(ds, self.sample_dim)
 
     def apply(self, func):
+        """Apply a function to each instance's time series."""
+        return [func(ts) for ts in self]
+
+    def append(self, other):
         """
-        Apply function on each instance.
+        Append another contiguous ragged array (in place).
+
+        The two collections are merged by instance: observations of shared
+        instances are combined, and instances present in only one are added.
+
+        Parameters
+        ----------
+        other : ContiguousRaggedArray or xarray.Dataset
+            Contiguous ragged array to append (same structure).
         """
-        return self.ds.groupby(self.sample_dim).map(func)
+        other_ds = other.ds if isinstance(other, ContiguousRaggedArray) \
+            else other
+        other_cra = ContiguousRaggedArray(
+            other_ds, self.count_var, self.instance_dim,
+            instance_id_var=self.instance_id_var)
+
+        id_var = self.instance_id_var or self.instance_dim
+        # per-instance variables to collapse back after regrouping (not the id)
+        instance_vars = [v for v in self.instance_variables if v != id_var]
+        coord_vars = [v for v in instance_vars if v in self.ds.coords]
+
+        # broadcast both to point form (every obs carries its instance vars),
+        # concatenate along the sample dimension, then regroup by instance id
+        combined = xr.concat(
+            [self.to_point_data().ds, other_cra.to_point_data().ds],
+            dim=self.sample_dim)
+        new_ds = point_to_contiguous(
+            combined, self.sample_dim, self.instance_dim, id_var,
+            count_var=self.count_var, instance_vars=instance_vars,
+            coord_vars=coord_vars)
+        self.__init__(new_ds, self.count_var, self.instance_dim,
+                      instance_id_var=self.instance_id_var)
 
 
 class IndexedRaggedArray:
@@ -1071,7 +1245,9 @@ class IndexedRaggedArray:
     ds : xarray.Dataset
         Indexed ragged array dataset.
     instance_variables : list
-        List of instance variables.
+        Per-instance metadata variables (over the instance dimension).
+    observation_variables : list
+        Measurement variables (over the sample dimension).
     instance_ids : list
         List of instance ids.
 
@@ -1104,7 +1280,11 @@ class IndexedRaggedArray:
         self.index_var = index_var
         self.sample_dim = sample_dim
         self.instance_id_var = instance_id_var
-        self._data = ds.set_coords(self.index_var).set_xindex(self.index_var)
+        # index_var is a (non-dimension) coordinate, but we deliberately do not
+        # build an xarray/pandas index on it: sel_instance uses a precomputed
+        # sort-by-index offset table instead (see _set_instance_lut), which is
+        # faster and lighter than a label lookup over the duplicated index.
+        self._data = ds.set_coords(self.index_var)
         self.validate()
 
         self.instance_dim = ds[index_var].attrs["instance_dimension"]
@@ -1132,6 +1312,19 @@ class IndexedRaggedArray:
         else:
             instance_ids = np.unique(self.ds[self.index_var])
         self._lookup = _InstanceLookup(instance_ids)
+
+        # precomputed sort-by-index access: obs indices grouped by instance
+        # position, so an instance's samples are a contiguous slice of _order
+        # (O(1) offset lookup, like the contiguous ragged array)
+        n_inst = instance_ids.size
+        index = self.ds[self.index_var].to_numpy()
+        self._order = np.argsort(index, kind="stable")
+        self._counts = np.bincount(index, minlength=n_inst)
+        self._starts = np.cumsum(self._counts) - self._counts
+        # when the samples are already grouped by instance (common: produced by
+        # to_indexed, and typical for cell files), each instance is a contiguous
+        # slice and we can avoid the fancy-index gather entirely
+        self._grouped = index.size == 0 or bool(np.all(index[:-1] <= index[1:]))
 
     @classmethod
     def from_file(cls, filename: str, index_var: str, sample_dim: str,
@@ -1161,22 +1354,15 @@ class IndexedRaggedArray:
 
     def save(self, filename: str):
         """
-        Write data to file.
+        Write data to file with CF metadata finalized.
 
         Parameters
         ----------
         filename : str
-            Filename.
+            Filename (".nc" or ".zarr").
         """
-        suffix = Path(filename).suffix
-
-        if suffix == ".nc":
-            self.ds.to_netcdf(filename)
-        elif suffix == ".zarr":
-            self.ds.to_zarr(filename)
-        else:
-            raise ValueError(f"Unknown file suffix '{suffix}' "
-                             "(.nc and .zarr supported)")
+        _save_cf(self.ds, filename, "timeSeries",
+                 instance_id_var=self.instance_id_var)
 
     @property
     def ds(self) -> xr.Dataset:
@@ -1191,7 +1377,7 @@ class IndexedRaggedArray:
         return self._data
 
     @property
-    def size(self) -> list:
+    def size(self) -> int:
         """
         Number of instances.
 
@@ -1219,12 +1405,31 @@ class IndexedRaggedArray:
     @property
     def instance_variables(self) -> list:
         """
-        Instance variables.
+        Instance variables (dimensioned by the instance dimension only, i.e.
+        the per-instance metadata such as lon/lat/location_id).
 
         Returns
         -------
         instance_variables : list of str
-            Instance variables.
+            Instance variable names.
+        """
+        return [
+            var for var in self.ds.variables
+            if (self.ds[var].dims == (self.instance_dim,)) and
+            (var != self.instance_dim) and
+            ("sample_dimension" not in self.ds[var].attrs)
+        ]
+
+    @property
+    def observation_variables(self) -> list:
+        """
+        Observation variables (dimensioned by the sample dimension, i.e. the
+        measurements that vary per observation).
+
+        Returns
+        -------
+        observation_variables : list of str
+            Observation variable names.
         """
         return [
             var for var in self.ds.variables
@@ -1249,9 +1454,15 @@ class IndexedRaggedArray:
         pos = int(self._lookup.positions(i)[0])
         if pos == -1:
             return None
-        # select the samples of this instance and the instance-level data by
-        # position (the instance dimension need not carry a coordinate)
-        data = self.ds.sel({self.index_var: pos}).isel({self.instance_dim: pos})
+        # the instance's samples are a contiguous slice of the precomputed
+        # sort-by-index order; select them and the instance-level data by
+        # position (no label lookup / index needed)
+        start = int(self._starts[pos])
+        end = start + int(self._counts[pos])
+        sample_idx = slice(start, end) if self._grouped \
+            else self._order[start:end]
+        data = self.ds.isel({self.sample_dim: sample_idx,
+                             self.instance_dim: pos})
 
         # reset index variable or drop index variable (my preference)?
         data[self.index_var] = (self.sample_dim,
@@ -1259,21 +1470,26 @@ class IndexedRaggedArray:
 
         return data
 
+    def _wrap(self, ds: xr.Dataset) -> "IndexedRaggedArray":
+        """Wrap a subset dataset in a new IndexedRaggedArray."""
+        return IndexedRaggedArray(ds, self.index_var, self.sample_dim,
+                                  instance_id_var=self.instance_id_var)
+
     def sel_instances(self,
                       i: np.array,
-                      ignore_missing: bool = True) -> xr.Dataset:
+                      ignore_missing: bool = True) -> "IndexedRaggedArray":
         """
-        Select multiple instances (time series).
+        Select several instances, preserving request order.
 
         Parameters
         ----------
         i : numpy.array
-            Instance identifier.
+            Instance identifier(s).
 
         Returns
         -------
-        ds : xr.Dataset
-            Time series for instance.
+        data : IndexedRaggedArray
+            An indexed ragged array with the selected instances.
         """
         i = np.atleast_1d(np.asarray(i))
         positions = self._lookup.positions(i)
@@ -1281,7 +1497,7 @@ class IndexedRaggedArray:
         if ignore_missing:
             keep = positions != -1
             if not keep.any():
-                raise ValueError("No valid instances selected")
+                return None
         else:
             if np.any(positions == -1):
                 raise ValueError("Missing instances selected")
@@ -1304,8 +1520,7 @@ class IndexedRaggedArray:
         # copy attributes
         data[self.index_var].attrs = self.ds[self.index_var].attrs
 
-        return IndexedRaggedArray(data, self.index_var, self.sample_dim,
-                                  instance_id_var=self.instance_id_var)
+        return self._wrap(data)
 
     def __iter__(self) -> xr.Dataset:
         """
@@ -1392,43 +1607,114 @@ class IndexedRaggedArray:
         return PointData(ds, self.sample_dim)
 
     def apply(self, func):
-        """
-        Apply function on each instance.
-        """
-        # return self.ds.groupby(self.sample_dim).apply(func)
-        return self.ds.groupby(self.sample_dim).map(func)
+        """Apply a function to each instance's time series."""
+        return [func(ts) for ts in self]
 
-    def append(self, ds: xr.Dataset):
+    def append(self, other):
         """
-        Append indexed ragged array time series.
+        Append another indexed ragged array (in place).
+
+        The two collections are merged by instance (via a contiguous ragged
+        array): observations of shared instances are combined, and instances
+        present in only one are added.
 
         Parameters
         ----------
-        ds : xarray.Dataset
-            Indexed ragged array time series.
+        other : IndexedRaggedArray or xarray.Dataset
+            Indexed ragged array to append (same structure).
         """
-        verify_indexed_ragged(ds, self.index_var, self.sample_dim)
+        other_ds = other.ds if isinstance(other, IndexedRaggedArray) else other
+        other_ira = IndexedRaggedArray(
+            other_ds, self.index_var, self.sample_dim,
+            instance_id_var=self.instance_id_var)
 
-        # use instance_id in index variable if instance dimension is a variable
-        if self.instance_dim in self.ds:
-            self.ds[self.index_var] = self.ds[self.instance_dim][self.ds[
-                self.index_var]]
+        cra = self.to_contiguous()
+        cra.append(other_ira.to_contiguous())
+        new_ds = cra.to_indexed(index_var=self.index_var).ds
+        self.__init__(new_ds, self.index_var, self.sample_dim,
+                      instance_id_var=self.instance_id_var)
 
-        if self.instance_dim in ds:
-            # assume this has been set or not?
-            ds = ds.set_coords(self.index_var).set_xindex(self.index_var)
-            ds[self.index_var] = (
-                self.sample_dim,
-                ds[self.instance_dim].values[ds[self.index_var]])
 
-        self._data = xr.combine_nested([self._data, ds], self.sample_dim)
+def _find_marker_var(ds: xr.Dataset, attr: str) -> str:
+    """Return the name of the variable carrying a CF marker attribute."""
+    for v in ds.variables:
+        if attr in ds[v].attrs:
+            return str(v)
+    raise ValueError(f"No variable with a '{attr}' attribute found.")
 
-        if self.instance_dim in self.ds:
-            instance_ids = self.ds[self.instance_dim].to_numpy()
-            self.ds[self.index_var] = (
-                self.sample_dim,
-                _InstanceLookup(instance_ids).positions(
-                    self.ds[self.index_var].values))
 
-        self._set_instance_lut()
+def _infer_sample_dim(ds: xr.Dataset) -> str:
+    """Infer the sample dimension of a point dataset."""
+    if len(ds.dims) == 1:
+        return str(list(ds.dims)[0])
+    for v in ds.data_vars:
+        if ds[v].ndim == 1:
+            return str(ds[v].dims[0])
+    raise ValueError("Could not infer the sample dimension; pass 'sample_dim'.")
+
+
+def open_cf(source, instance_id_var: str = None, sample_dim: str = None,
+            instance_dim: str = None, element_dim: str = None,
+            element_coord: str = None, **kwargs):
+    """
+    Open a CF discrete sampling geometry dataset or file and return the matching
+    wrapper.
+
+    The representation is auto-detected with
+    :func:`ascat.cf_conversions.detect_cf_representation`. Contiguous ragged,
+    indexed ragged and point datasets are configured automatically from their CF
+    marker attributes; multidimensional arrays require ``instance_dim`` and
+    ``element_dim``.
+
+    Parameters
+    ----------
+    source : str, pathlib.Path or xarray.Dataset
+        A file path, or an already-open dataset.
+    instance_id_var : str, optional
+        Variable holding the instance identifiers (e.g. "location_id").
+    sample_dim : str, optional
+        Sample dimension name (point data; inferred if not given).
+    instance_dim, element_dim : str, optional
+        Instance / element dimension names (required for multidimensional
+        arrays).
+    element_coord : str, optional
+        Shared element coordinate name (orthogonal arrays; default element_dim).
+    **kwargs
+        Passed to :func:`xarray.open_dataset` when ``source`` is a path.
+
+    Returns
+    -------
+    data : PointData, ContiguousRaggedArray, IndexedRaggedArray, \
+OrthogonalMultidimArray or IncompleteMultidimArray
+        The wrapper matching the detected representation.
+    """
+    ds = source if isinstance(source, xr.Dataset) \
+        else xr.open_dataset(source, **kwargs)
+
+    kind = detect_cf_representation(ds)
+
+    if kind == "contiguous":
+        count_var = _find_marker_var(ds, "sample_dimension")
+        instance_dim = instance_dim or ds[count_var].dims[0]
+        return ContiguousRaggedArray(ds, count_var, instance_dim,
+                                     instance_id_var=instance_id_var)
+    if kind == "indexed":
+        index_var = _find_marker_var(ds, "instance_dimension")
+        sample_dim = sample_dim or ds[index_var].dims[0]
+        return IndexedRaggedArray(ds, index_var, sample_dim,
+                                  instance_id_var=instance_id_var)
+    if kind == "point":
+        return PointData(ds, sample_dim or _infer_sample_dim(ds))
+
+    # multidimensional array (orthogonal / incomplete)
+    if instance_dim is None or element_dim is None:
+        raise ValueError(
+            f"'{kind}' multidimensional array requires 'instance_dim' and "
+            "'element_dim' to be specified.")
+    if kind == "orthogonal":
+        return OrthogonalMultidimArray(ds, instance_dim, element_dim,
+                                       element_coord=element_coord,
+                                       instance_id_var=instance_id_var)
+    return IncompleteMultidimArray(ds, instance_dim, element_dim,
+                                   instance_id_var=instance_id_var)
 

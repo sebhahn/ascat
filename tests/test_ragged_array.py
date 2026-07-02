@@ -23,7 +23,9 @@ from ascat.ragged_array import (
     IndexedRaggedArray,
     IncompleteMultidimArray,
     OrthogonalMultidimArray,
+    open_cf,
 )
+from ascat.cf_conversions import finalize_cf, detect_cf_representation
 
 SAMPLE_DIM = "obs"
 INSTANCE_DIM = "loc"
@@ -164,7 +166,10 @@ def test_verify_point_rejects_non_point():
 def test_contiguous_basic():
     cra = ContiguousRaggedArray(contiguous_ds(), COUNT_VAR, INSTANCE_DIM)
     assert cra.size == 3
-    assert set(cra.instance_variables) == {"temperature", "flag"}
+    # observation variables are over the sample dimension; instance variables
+    # are the per-instance metadata over the instance dimension (CF terms)
+    assert set(cra.observation_variables) == {"temperature", "flag"}
+    assert set(cra.instance_variables) == {"lon"}   # not the count variable
     np.testing.assert_array_equal(cra.instance_ids, INSTANCE_IDS)
 
 
@@ -186,13 +191,14 @@ def test_contiguous_iter():
 def test_contiguous_sel_instances():
     cra = ContiguousRaggedArray(contiguous_ds(), COUNT_VAR, INSTANCE_DIM)
     sel = cra.sel_instances(np.array([30, 10]))  # request order
-    np.testing.assert_array_equal(sel["loc"].values, [30, 10])
+    assert isinstance(sel, ContiguousRaggedArray)
+    np.testing.assert_array_equal(sel.ds["loc"].values, [30, 10])
     # instance 30 -> [3,4,5], instance 10 -> [0,1]
-    np.testing.assert_array_equal(sel["temperature"].values,
+    np.testing.assert_array_equal(sel.ds["temperature"].values,
                                   [3., 4., 5., 0., 1.])
     # missing ids are skipped
     sel2 = cra.sel_instances(np.array([20, 999]))
-    np.testing.assert_array_equal(sel2["temperature"].values, [2.])
+    np.testing.assert_array_equal(sel2.ds["temperature"].values, [2.])
     assert cra.sel_instances(np.array([999])) is None
 
 
@@ -230,8 +236,8 @@ def test_contiguous_large_sparse_ids_selection():
         cra.sel_instance(6_599_999)["v"].values, [4., 5., 6.])
     assert cra.sel_instance(12_345) is None
     sel = cra.sel_instances(np.array([6_599_999, 10]))
-    np.testing.assert_array_equal(sel["loc"].values, [6_599_999, 10])
-    np.testing.assert_array_equal(sel["v"].values, [4., 5., 6., 0.])
+    np.testing.assert_array_equal(sel.ds["loc"].values, [6_599_999, 10])
+    np.testing.assert_array_equal(sel.ds["v"].values, [4., 5., 6., 0.])
 
 
 def test_indexed_large_sparse_ids_selection():
@@ -420,12 +426,51 @@ def test_point_to_indexed_and_contiguous():
     ira = pd.to_indexed(index_var=INDEX_VAR, instance_dim=INSTANCE_DIM)
     assert isinstance(ira, IndexedRaggedArray)
     np.testing.assert_array_equal(np.sort(ira.instance_ids), INSTANCE_IDS)
+    # index variable carries the CF marker attribute
+    assert ira.ds[INDEX_VAR].attrs.get("instance_dimension") == INSTANCE_DIM
+    # delegating to the pure conversion also finalizes the featureType
+    assert ira.ds.attrs.get("featureType") == "timeSeries"
 
     cra = PointData(point_ds(), SAMPLE_DIM).to_contiguous(
         count_var=COUNT_VAR, instance_dim=INSTANCE_DIM
     )
     assert isinstance(cra, ContiguousRaggedArray)
     assert int(cra.ds[COUNT_VAR].sum()) == N_OBS
+    np.testing.assert_array_equal(np.sort(cra.instance_ids), INSTANCE_IDS)
+    assert cra.ds[COUNT_VAR].attrs.get("sample_dimension") == SAMPLE_DIM
+    assert cra.ds.attrs.get("featureType") == "timeSeries"
+
+    # round trip point -> contiguous -> point preserves the observations
+    back = cra.to_point_data()
+    np.testing.assert_array_equal(
+        np.sort(back.ds["temperature"].values),
+        np.sort(pd.ds["temperature"].values))
+
+
+def test_point_append():
+    pd = PointData(point_ds(), SAMPLE_DIM)
+    n0 = pd.ds.sizes[SAMPLE_DIM]
+    # append another point array (same structure)
+    pd.append(PointData(point_ds(), SAMPLE_DIM))
+    assert pd.ds.sizes[SAMPLE_DIM] == 2 * n0
+    # also accepts a raw point dataset
+    pd.append(point_ds())
+    assert pd.ds.sizes[SAMPLE_DIM] == 3 * n0
+    # the observations are concatenated
+    np.testing.assert_array_equal(
+        pd.ds["temperature"].values,
+        np.tile(point_ds()["temperature"].values, 3))
+    # appending something that is not point data raises
+    with pytest.raises(RuntimeError):
+        PointData(point_ds(), SAMPLE_DIM).append(contiguous_ds())
+
+
+def test_point_missing_instance_dim_raises():
+    pd = PointData(point_ds(), SAMPLE_DIM)
+    with pytest.raises(ValueError):
+        pd.to_contiguous(instance_dim="not_a_coord")
+    with pytest.raises(ValueError):
+        pd.to_indexed(instance_dim="not_a_coord")
 
 
 # --------------------------------------------------------------------------- #
@@ -598,6 +643,166 @@ def _assert_cf_metadata(d):
     assert d["sm"].attrs.get("units") == "percent"
     assert d["alt"].attrs.get("units") == "m"          # instance data var kept
     assert d["lon"].attrs.get("units") == "degrees_east"
+    assert "time" in d["sm"].attrs.get("coordinates", "")   # coordinates set
+
+
+def test_finalize_cf_sets_metadata():
+    ds = cf_contiguous_ds()
+    del ds["location_id"].attrs["cf_role"]              # strip, prove it's added
+    out = finalize_cf(ds, "timeSeries", instance_id_var="location_id")
+
+    assert out.attrs["featureType"] == "timeSeries"
+    assert out["location_id"].attrs["cf_role"] == "timeseries_id"
+    assert "time" in out["sm"].attrs["coordinates"]
+    # structural (count) and identifier variables get no coordinates attribute
+    assert "coordinates" not in out[COUNT_VAR].attrs
+    assert "coordinates" not in out["location_id"].attrs
+    # the input dataset is not mutated
+    assert "cf_role" not in ds["location_id"].attrs
+
+
+def test_save_finalizes_cf(tmp_path):
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    cases = {
+        "contiguous": (cra, "timeSeries"),
+        "indexed": (cra.to_indexed(), "timeSeries"),
+        "point": (cra.to_point_data(), "point"),
+        "incomplete": (cra.to_incomplete(), "timeSeries"),
+        "orthogonal": (cra.to_orthogonal("time", strict=False), "timeSeries"),
+    }
+    for name, (obj, feature_type) in cases.items():
+        fn = tmp_path / f"{name}.nc"
+        obj.save(str(fn))
+        # read raw (decode_cf=False) so the coordinates attribute is visible
+        raw = xr.open_dataset(fn, decode_cf=False)
+        assert raw.attrs.get("featureType") == feature_type
+        assert "time" in raw["sm"].attrs.get("coordinates", "")
+        if feature_type == "timeSeries":
+            assert raw["location_id"].attrs.get("cf_role") == "timeseries_id"
+        raw.close()
+
+
+def test_pointdata_from_file(tmp_path):
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    fn = tmp_path / "point.nc"
+    cra.to_point_data().save(str(fn))
+    pt = PointData.from_file(str(fn))                 # sample_dim inferred
+    assert pt.sample_dim == SAMPLE_DIM
+    assert pt.ds.sizes[SAMPLE_DIM] == N_OBS
+
+
+def test_apply_runs_once_per_instance():
+    # apply must run func on each instance's time series (not each observation),
+    # consistently across representations
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    for arr in (cra, cra.to_indexed(), cra.to_incomplete(),
+                cra.to_orthogonal("time", strict=False)):
+        sizes = arr.apply(lambda ts: ts.sizes.get(SAMPLE_DIM,
+                                                   ts.sizes.get("time")))
+        assert len(sizes) == 3          # one result per instance, not per obs
+
+
+def _shared_time_cra(ids, offset=0):
+    """Contiguous ragged with a shared 2-timestamp axis (valid for all forms)."""
+    times = np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
+    n = len(ids) * times.size
+    ds = xr.Dataset(
+        {"sm": ((SAMPLE_DIM,), (np.arange(n) + offset).astype("float32")),
+         COUNT_VAR: ((INSTANCE_DIM,), np.full(len(ids), times.size, np.int64),
+                     {"sample_dimension": SAMPLE_DIM}),
+         "location_id": ((INSTANCE_DIM,), np.array(ids, dtype=np.int64))},
+        coords={"time": ((SAMPLE_DIM,), np.tile(times, len(ids)))},
+    )
+    return ContiguousRaggedArray(ds, COUNT_VAR, INSTANCE_DIM,
+                                 instance_id_var="location_id")
+
+
+@pytest.mark.parametrize("to_form", [
+    lambda c: c,
+    lambda c: c.to_indexed(),
+    lambda c: c.to_incomplete(),
+    lambda c: c.to_orthogonal("time", strict=True),
+])
+def test_append_unions_instances(to_form):
+    # append two disjoint collections -> the instance sets are unioned, in the
+    # same representation
+    a = to_form(_shared_time_cra([10, 20]))
+    b = to_form(_shared_time_cra([30, 40], offset=100))
+    a.append(b)
+    assert isinstance(a, type(b))
+    cra = a if isinstance(a, ContiguousRaggedArray) else a.to_contiguous()
+    np.testing.assert_array_equal(np.sort(cra.instance_ids), [10, 20, 30, 40])
+    assert cra.sel_instance(40)["sm"].size == 2       # new instance's obs kept
+
+
+def test_contiguous_append_merges_shared_instance():
+    a = _shared_time_cra([10, 20, 30])
+    a.append(_shared_time_cra([30, 40], offset=100))   # 30 shared, 40 new
+    np.testing.assert_array_equal(np.sort(a.instance_ids), [10, 20, 30, 40])
+    assert a.sel_instance(30)["sm"].size == 4          # merged (2 + 2)
+    assert a.sel_instance(40)["sm"].size == 2
+    # also accepts a raw dataset
+    a.append(_shared_time_cra([50]).ds)
+    assert 50 in a.instance_ids
+
+
+def test_uniform_instance_selection_api():
+    # size / instance_ids / sel_instance / sel_instances behave the same across
+    # the four instance-bearing representations, and sel_instances returns the
+    # same wrapper type
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    for arr in (cra, cra.to_indexed(), cra.to_incomplete(),
+                cra.to_orthogonal("time", strict=False)):
+        assert arr.size == 3
+        np.testing.assert_array_equal(arr.instance_ids, [10, 20, 30])
+        # instance variables are the per-instance metadata (over the instance
+        # dimension), the same on every representation
+        assert "location_id" in arr.instance_variables
+        assert COUNT_VAR not in arr.instance_variables      # not the count var
+        assert arr.sel_instance(20) is not None
+        assert arr.sel_instance(999) is None
+
+        sub = arr.sel_instances([30, 10])
+        assert isinstance(sub, type(arr))            # same wrapper type
+        np.testing.assert_array_equal(sub.instance_ids, [30, 10])
+        assert arr.sel_instances([999]) is None
+
+
+def test_detect_cf_representation():
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    assert detect_cf_representation(cra.ds) == "contiguous"
+    assert detect_cf_representation(cra.to_indexed().ds) == "indexed"
+    assert detect_cf_representation(cra.to_point_data().ds) == "point"
+    assert detect_cf_representation(
+        cra.to_orthogonal("time", strict=False).ds) == "orthogonal"
+    assert detect_cf_representation(cra.to_incomplete().ds) == "incomplete"
+
+
+def test_open_cf_factory():
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    # ragged/point are auto-configured from the CF marker attributes
+    assert isinstance(open_cf(cra.ds, instance_id_var="location_id"),
+                      ContiguousRaggedArray)
+    assert isinstance(open_cf(cra.to_indexed().ds,
+                              instance_id_var="location_id"),
+                      IndexedRaggedArray)
+    assert isinstance(open_cf(cra.to_point_data().ds), PointData)
+    # multidimensional arrays need the dimension hints
+    orth = open_cf(cra.to_orthogonal("time", strict=False).ds,
+                   instance_id_var="location_id",
+                   instance_dim=INSTANCE_DIM, element_dim="time")
+    assert isinstance(orth, OrthogonalMultidimArray)
+    # instance 30's samples sit on the shared time axis, padded elsewhere
+    sm = orth.sel_instance(30)["sm"].values
+    np.testing.assert_array_equal(sm[sm != fill_value(sm.dtype)], [3., 4., 5.])
+    with pytest.raises(ValueError):
+        open_cf(cra.to_incomplete().ds)              # missing instance/element
 
 
 def test_incomplete_preserves_cf_metadata():

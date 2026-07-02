@@ -12,10 +12,15 @@ can be used directly on any dataset that follows the CF conventions.
 
 Representations
 ---------------
-- point           : one sample dimension, no grouping.
-- indexed ragged  : an index variable maps each sample to an instance.
-- contiguous ragged: a count variable gives each instance's number of samples.
-- orthomulti      : a dense (instance x element) array, padded with fill values.
+- point            : one sample dimension, no grouping.
+- indexed ragged   : an index variable maps each sample to an instance
+  (CF 9.3.4).
+- contiguous ragged: a count variable gives each instance's number of samples
+  (CF 9.3.3).
+- orthogonal multidim : a dense (instance x element) array sharing one element
+  axis, complete/unpadded (CF 9.3.1).
+- incomplete multidim : a dense (instance x element) array with a positional
+  element axis, padded with fill values (CF 9.3.2).
 """
 
 from __future__ import annotations
@@ -25,7 +30,137 @@ from typing import Union, Sequence
 import numpy as np
 import xarray as xr
 
-from ascat.utils import fill_value, vrange
+from ascat.array_utils import fill_value, vrange
+
+
+_GEOMETRY_STANDARD_NAMES = {"longitude", "latitude", "time", "height",
+                            "altitude"}
+_GEOMETRY_NAMES = {"lon", "longitude", "lat", "latitude", "time",
+                   "alt", "altitude", "height"}
+
+
+def _geometry_coordinates(ds: xr.Dataset) -> list:
+    """Names of the spatiotemporal coordinate variables (lon/lat/time/alt)."""
+    coords = []
+    for v in ds.variables:
+        name = str(v).lower()
+        standard_name = ds[v].attrs.get("standard_name", "")
+        if standard_name in _GEOMETRY_STANDARD_NAMES or name in _GEOMETRY_NAMES:
+            coords.append(str(v))
+    return coords
+
+
+def finalize_cf(
+    ds: xr.Dataset,
+    feature_type: Union[str, None] = "timeSeries",
+    instance_id_var: Union[str, None] = None,
+    coordinates: Union[Sequence[str], None] = None,
+) -> xr.Dataset:
+    """
+    Fill in CF discrete-sampling-geometry metadata on a dataset.
+
+    Sets the global ``featureType`` attribute, marks the instance identifier
+    with ``cf_role="timeseries_id"`` (for non-point feature types), and gives
+    each measurement variable a ``coordinates`` attribute listing the
+    spatiotemporal coordinate variables. Existing ``cf_role`` / ``coordinates``
+    attributes are kept. The input dataset is not modified.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Dataset in any CF discrete sampling geometry representation.
+    feature_type : str or None, optional
+        Value for the global ``featureType`` attribute (default "timeSeries";
+        None to leave it unchanged).
+    instance_id_var : str, optional
+        Name of the instance identifier variable to mark with
+        ``cf_role="timeseries_id"``.
+    coordinates : sequence of str, optional
+        Coordinate variable names for the ``coordinates`` attribute. If None,
+        they are auto-detected (lon/lat/time/alt by name or standard_name).
+
+    Returns
+    -------
+    ds : xarray.Dataset
+        A copy with the CF metadata filled in.
+    """
+    ds = ds.copy()
+    ds.attrs = dict(ds.attrs)
+    if feature_type is not None:
+        ds.attrs["featureType"] = feature_type
+
+    if (instance_id_var is not None and instance_id_var in ds.variables
+            and feature_type != "point"):
+        attrs = dict(ds[instance_id_var].attrs)
+        attrs.setdefault("cf_role", "timeseries_id")
+        ds[instance_id_var].attrs = attrs
+
+    if coordinates is None:
+        coordinates = _geometry_coordinates(ds)
+    if coordinates:
+        coord_str = " ".join(coordinates)
+        # dimensions along which observations vary (the time axis); used to give
+        # the coordinates attribute to measurement variables, not per-instance
+        # metadata (which does not vary with time)
+        obs_dims = set()
+        for c in coordinates:
+            if (str(c).lower() == "time"
+                    or ds[c].attrs.get("standard_name") == "time"):
+                obs_dims.update(ds[c].dims)
+        skip = set(coordinates)
+        if instance_id_var is not None:
+            skip.add(instance_id_var)
+        for v in ds.data_vars:
+            attrs = ds[v].attrs
+            # skip coordinate, identifier and structural (count/index) variables,
+            # and variables that already declare coordinates (in attrs or, as set
+            # by a NetCDF backend, in encoding)
+            if (v in skip or "sample_dimension" in attrs
+                    or "instance_dimension" in attrs or "cf_role" in attrs
+                    or "coordinates" in attrs
+                    or "coordinates" in ds[v].encoding):
+                continue
+            if obs_dims and not (set(ds[v].dims) & obs_dims):
+                continue
+            new_attrs = dict(attrs)
+            new_attrs["coordinates"] = coord_str
+            ds[v].attrs = new_attrs
+    return ds
+
+
+def detect_cf_representation(ds: xr.Dataset) -> str:
+    """
+    Detect the CF discrete sampling geometry representation of a dataset.
+
+    Returns one of "contiguous", "indexed", "orthogonal", "incomplete" or
+    "point". Ragged arrays are identified by their marker attributes
+    (``sample_dimension`` / ``instance_dimension``); a multidimensional array is
+    recognised by a data variable with two or more dimensions and classed as
+    orthogonal when one of those dimensions is a shared coordinate axis, else
+    incomplete; anything else is treated as point data.
+    """
+    for v in ds.variables:
+        if "sample_dimension" in ds[v].attrs:
+            return "contiguous"
+    for v in ds.variables:
+        if "instance_dimension" in ds[v].attrs:
+            return "indexed"
+    if ds.attrs.get("featureType") == "point":
+        return "point"
+
+    multidim = [v for v in ds.data_vars if ds[v].ndim >= 2]
+    if multidim:
+        # orthogonal has a shared 1-D element axis: a geometry coordinate
+        # (e.g. time) that is a dimension coordinate. The instance dimension may
+        # also carry a coordinate, but that holds ids, not a geometry axis.
+        dims = set().union(*(ds[v].dims for v in multidim))
+        geometry = set(_geometry_coordinates(ds))
+        for d in dims:
+            if (str(d) in geometry and d in ds.coords
+                    and ds[str(d)].ndim == 1):
+                return "orthogonal"
+        return "incomplete"
+    return "point"
 
 
 def point_to_indexed(
@@ -333,9 +468,10 @@ def contiguous_to_incomplete(
     rows = np.arange(n_inst).repeat(row_size)
     cols = vrange(np.zeros_like(row_size), row_size)
 
-    return _build_grid_dataset(
+    reshaped = _build_grid_dataset(
         ds, sample_dim, instance_dim, element_dim, rows, cols,
         n_inst, n_elem, instance_ids, skip_vars={count_var})
+    return finalize_cf(reshaped, "timeSeries", instance_id_var=instance_id_var)
 
 
 def incomplete_to_contiguous(
@@ -371,8 +507,9 @@ def incomplete_to_contiguous(
 
     valid = _grid_valid(ds, grid_vars[0], instance_dim, element_dim)
     row_size = valid.sum(axis=1).astype(np.int32)
-    return _flatten_grid(ds, grid_vars, instance_dim, element_dim, valid,
-                         row_size, count_var, sample_dim)
+    result = _flatten_grid(ds, grid_vars, instance_dim, element_dim, valid,
+                           row_size, count_var, sample_dim)
+    return finalize_cf(result, "timeSeries")
 
 
 def contiguous_to_orthogonal(
@@ -439,7 +576,7 @@ def contiguous_to_orthogonal(
     # the shared element coordinate (1-D over the element dimension)
     reshaped = reshaped.assign_coords(
         {element_coord: ([element_dim], unique_elems)})
-    return reshaped
+    return finalize_cf(reshaped, "timeSeries", instance_id_var=instance_id_var)
 
 
 def orthogonal_to_contiguous(
@@ -477,4 +614,4 @@ def orthogonal_to_contiguous(
         result = result.assign_coords(
             {element_coord: ((sample_dim,),
                              np.tile(ds[element_coord].values, n_inst))})
-    return result
+    return finalize_cf(result, "timeSeries")
