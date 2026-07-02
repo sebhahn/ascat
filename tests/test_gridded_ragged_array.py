@@ -8,9 +8,11 @@ import xarray as xr
 from pygeogrids.grids import CellGrid
 
 from ascat.gridded_ragged_array import (
+    GridRegistry,
     GriddedContiguousRaggedArray,
     GriddedIndexedRaggedArray,
     GriddedOrthoMultiArray,
+    grid_registry,
 )
 
 
@@ -141,6 +143,45 @@ def test_indexed_read_by_lonlat(indexed_root):
     lon, lat = 1.0, 1.0  # nearest gpi is 11
     np.testing.assert_array_equal(gra.read(lon=lon, lat=lat)["sm"].values,
                                   by_gpi)
+
+
+# --------------------------------------------------------------------------- #
+# grid registry
+# --------------------------------------------------------------------------- #
+def test_grid_registry_register_get_cache():
+    # isolated instance -> no leakage into the shared registry
+    reg = GridRegistry()
+    grid = _grid()
+    reg.register("obj", grid)
+    assert reg.get("obj") is grid
+
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return _grid()
+
+    reg.register("factory", factory)
+    assert reg.get("factory") is reg.get("factory")   # cached
+    assert len(calls) == 1                             # factory called once
+
+    with pytest.raises(KeyError):
+        reg.get("no_such_grid")
+
+
+def test_registry_instances_are_independent():
+    a, b = GridRegistry(), GridRegistry()
+    a.register("only_in_a", _grid())
+    assert a.get("only_in_a") is not None
+    with pytest.raises(KeyError):
+        b.get("only_in_a")
+
+
+def test_reader_accepts_grid_name(contig_root):
+    # the readers use the shared module-level registry for name lookups
+    grid_registry.register("test_reader_grid", _grid())
+    gra = GriddedContiguousRaggedArray(contig_root, "test_reader_grid")
+    np.testing.assert_array_equal(gra.read(gpi=10)["sm"].values, [0., 1.])
 
 
 # --------------------------------------------------------------------------- #

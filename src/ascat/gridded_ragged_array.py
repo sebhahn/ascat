@@ -19,14 +19,61 @@ from pathlib import Path
 from typing import Union
 
 import numpy as np
+from fibgrid.realization import FibGrid
 from pygeogrids.grids import CellGrid
 
-from ascat.grids.grid_registry import GridRegistry
 from ascat.ragged_array import (
     ContiguousRaggedArray,
     IndexedRaggedArray,
     OrthogonalMultidimArray,
 )
+
+
+class GridRegistry:
+    """
+    Resolve grid names to :mod:`pygeogrids` grids.
+
+    ``"fibgrid_<spacing>"`` (e.g. "fibgrid_12.5") builds a
+    :class:`~fibgrid.realization.FibGrid` on demand; any other name must be
+    registered with :meth:`register`, either as a grid object or a
+    zero-argument factory (e.g. ``lambda: load_grid(path)``). Resolved grids are
+    cached, so a grid is built or loaded only once per name.
+
+    Each instance holds its own registry and cache. A shared module-level
+    instance, :data:`grid_registry`, is used by the readers by default; create a
+    separate ``GridRegistry()`` when you want isolated state (e.g. in tests).
+    """
+
+    def __init__(self):
+        self._registry = {}
+        self._cache = {}
+
+    def register(self, name: str, grid) -> None:
+        """Register a grid object or zero-argument factory under ``name``."""
+        self._registry[name] = grid
+        self._cache.pop(name, None)
+
+    def get(self, name: str) -> CellGrid:
+        """Return the grid for ``name``, building and caching it on first use."""
+        if name not in self._cache:
+            self._cache[name] = self._resolve(name)
+        return self._cache[name]
+
+    def _resolve(self, name: str) -> CellGrid:
+        if name in self._registry:
+            grid = self._registry[name]
+            return grid() if callable(grid) else grid
+        parts = name.split("_")
+        if len(parts) == 2 and parts[0] == "fibgrid":
+            return FibGrid(float(parts[1]))
+        raise KeyError(
+            f"Grid '{name}' is not registered. Register it with "
+            "grid_registry.register(name, grid), or use a 'fibgrid_<spacing>' "
+            "name (e.g. 'fibgrid_12.5').")
+
+
+#: Shared grid registry used by the readers when a grid name (str) is passed.
+grid_registry = GridRegistry()
 
 
 class GriddedRaggedArray:
@@ -56,8 +103,8 @@ class GriddedRaggedArray:
     root_path : str or pathlib.Path
         Directory containing the cell files (searched recursively).
     grid : pygeogrids.grids.CellGrid or str
-        Grid object, or a name resolvable by
-        :class:`~ascat.grids.grid_registry.GridRegistry` (e.g. "fibgrid_12.5").
+        Grid object, or a name resolvable by the module-level
+        :data:`grid_registry` (e.g. "fibgrid_12.5").
     fn_format : str, optional
         Format string for cell file names, formatted with the cell number, e.g.
         "{:04d}.nc" (default) or "H120_{:04d}.nc".
@@ -74,7 +121,7 @@ class GriddedRaggedArray:
         cache: bool = False,
     ):
         self.root_path = Path(root_path)
-        self.grid = GridRegistry().get(grid) if isinstance(grid, str) else grid
+        self.grid = grid_registry.get(grid) if isinstance(grid, str) else grid
         self.fn_format = fn_format
         self.cache = cache
 

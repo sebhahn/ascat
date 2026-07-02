@@ -218,30 +218,32 @@ def _build_grid_dataset(ds, sample_dim, instance_dim, element_dim, rows, cols,
     ``(instance, element)`` grid and carry the instance-level coordinates.
     """
     reshaped = xr.Dataset()
-    sample_coords = []
+    carry_coords = []
     for v in ds.variables:
-        if v in skip_vars or v == sample_dim:
+        if v in skip_vars or v == sample_dim or v == instance_dim:
             continue
         dims = ds[v].dims
-        if sample_dim not in dims:
-            continue
-        ax = dims.index(sample_dim)
-        arr = _scatter_along_sample(
-            ds[v].values, ax, rows, cols, n_inst, n_elem,
-            fill_value(ds[v].dtype))
-        new_dims = dims[:ax] + (instance_dim, element_dim) + dims[ax + 1:]
-        reshaped[v] = (new_dims, arr)
-        reshaped[v].encoding["_FillValue"] = fill_value(reshaped[v].dtype)
-        if v in ds.coords:
-            sample_coords.append(v)
+        if sample_dim in dims:
+            # scatter a sample-indexed variable into the (instance, element) grid
+            ax = dims.index(sample_dim)
+            arr = _scatter_along_sample(
+                ds[v].values, ax, rows, cols, n_inst, n_elem,
+                fill_value(ds[v].dtype))
+            new_dims = dims[:ax] + (instance_dim, element_dim) + dims[ax + 1:]
+            reshaped[v] = (new_dims, arr, dict(ds[v].attrs))
+            reshaped[v].encoding["_FillValue"] = fill_value(reshaped[v].dtype)
+            if v in ds.coords:
+                carry_coords.append(v)
+        elif dims == (instance_dim,):
+            # carry an instance-level variable (coord or data var) unchanged
+            reshaped[v] = ((instance_dim,), ds[v].values, dict(ds[v].attrs))
+            if v in ds.coords:
+                carry_coords.append(v)
 
     reshaped = reshaped.assign_coords({instance_dim: instance_ids})
-    for c in ds.coords:
-        if c != instance_dim and ds[c].dims == (instance_dim,):
-            reshaped = reshaped.assign_coords(
-                {c: ((instance_dim,), ds[c].values)})
-    if sample_coords:
-        reshaped = reshaped.set_coords(sample_coords)
+    if carry_coords:
+        reshaped = reshaped.set_coords(carry_coords)
+    reshaped.attrs = dict(ds.attrs)
     return reshaped
 
 
@@ -278,16 +280,25 @@ def _flatten_grid(ds, grid_vars, instance_dim, element_dim, valid, row_size,
             sample_dim if d == instance_dim else d
             for d in new_order if d != element_dim
         )
-        new_vars[v] = (out_dims, gathered)
+        new_vars[v] = (out_dims, gathered, dict(ds[v].attrs))
 
     new_vars[count_var] = (
         (instance_dim,), row_size, {"sample_dimension": sample_dim}
     )
-    coords = {
-        c: ((instance_dim,), ds[c].values)
-        for c in ds.coords if ds[c].dims == (instance_dim,)
-    }
-    return xr.Dataset(new_vars, coords=coords)
+    # carry instance-level variables (coords and data vars) with their attrs
+    coords = {}
+    for v in ds.variables:
+        if v in new_vars or v == instance_dim:
+            continue
+        if ds[v].dims == (instance_dim,):
+            entry = ((instance_dim,), ds[v].values, dict(ds[v].attrs))
+            if v in ds.coords:
+                coords[v] = entry
+            else:
+                new_vars[v] = entry
+    result = xr.Dataset(new_vars, coords=coords)
+    result.attrs = dict(ds.attrs)
+    return result
 
 
 def contiguous_to_incomplete(

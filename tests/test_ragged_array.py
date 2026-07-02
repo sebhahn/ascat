@@ -566,6 +566,56 @@ def test_incomplete_preserves_multidim_and_coords():
     np.testing.assert_array_equal(back.ds["lon"].values, orig["lon"].values)
 
 
+def cf_contiguous_ds():
+    """Contiguous ragged with full CF metadata: featureType, a cf_role
+    identifier, instance coords/vars, and variable units."""
+    rs = np.array([2, 1, 3], dtype=np.int64)
+    n = int(rs.sum())
+    return xr.Dataset(
+        {
+            "sm": ((SAMPLE_DIM,), np.arange(n, dtype="float32"),
+                   {"units": "percent"}),
+            COUNT_VAR: ((INSTANCE_DIM,), rs, {"sample_dimension": SAMPLE_DIM}),
+            "location_id": ((INSTANCE_DIM,), np.array([10, 20, 30]),
+                            {"cf_role": "timeseries_id"}),
+            "alt": ((INSTANCE_DIM,), np.array([1., 2., 3.], dtype="f4"),
+                    {"units": "m"}),
+        },
+        coords={
+            "lon": ((INSTANCE_DIM,), np.array([1., 2., 3.], dtype="f4"),
+                    {"units": "degrees_east"}),
+            "time": ((SAMPLE_DIM,),
+                     np.arange(n).astype("datetime64[s]").astype(
+                         "datetime64[ns]")),
+        },
+        attrs={"featureType": "timeSeries"},
+    )
+
+
+def _assert_cf_metadata(d):
+    assert d.attrs.get("featureType") == "timeSeries"
+    assert d["location_id"].attrs.get("cf_role") == "timeseries_id"
+    assert d["sm"].attrs.get("units") == "percent"
+    assert d["alt"].attrs.get("units") == "m"          # instance data var kept
+    assert d["lon"].attrs.get("units") == "degrees_east"
+
+
+def test_incomplete_preserves_cf_metadata():
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    inc = cra.to_incomplete()
+    _assert_cf_metadata(inc.ds)
+    _assert_cf_metadata(inc.to_contiguous().ds)
+
+
+def test_orthogonal_preserves_cf_metadata():
+    cra = ContiguousRaggedArray(cf_contiguous_ds(), COUNT_VAR, INSTANCE_DIM,
+                                instance_id_var="location_id")
+    orth = cra.to_orthogonal("time", strict=False)
+    _assert_cf_metadata(orth.ds)
+    _assert_cf_metadata(orth.to_contiguous().ds)
+
+
 # --------------------------------------------------------------------------- #
 # the conversion functions can be used directly on a raw dataset
 # --------------------------------------------------------------------------- #
